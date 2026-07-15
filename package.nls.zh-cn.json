@@ -1,0 +1,7 @@
+{
+  "infiniteMap.language": "请选择语言",
+  "infiniteMap.uploadUrl": "请输入上传路径",
+  "infiniteMap.imageScaleSize": "导出图片大小，默认放大2倍",
+  "infiniteMap.imageBackgroundColor": "导出图片背景色",
+  "infiniteMap.markdownDescription": "\n\n 自定义图片上传接口，不填默认使用本地文件\n\n 例如http:\/\/www.api.cn\/upload \n\n 接口返回参考：\n\n ```js  \n{\n    \"errno\": \"0\",\n    \"msg\": \"ok\",\n    \"data\":  {  \"url\": \"http://www.api.cn/public/xxx.png\"   } \n}\n ``` "
+}

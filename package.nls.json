@@ -1,0 +1,7 @@
+{
+  "infiniteMap.language": "Please select language",
+  "infiniteMap.uploadUrl": "Please enter the upload path",
+  "infiniteMap.imageScaleSize": "Export the picture size, enlarge by 2x by default",
+  "infiniteMap.imageBackgroundColor": "Export image background color",
+  "infiniteMap.markdownDescription": "\n\n Customize the image upload interface. If not filled in, local files will be used by default. \n\n For example http:\/\/www.api.cn\/upload \n\n Interface return reference: \n\n ```js  \n{\n    \"errno\": \"0\",\n    \"msg\": \"ok\",\n    \"data\":  {  \"url\": \"http://www.api.cn/public/xxx.png\"   } \n}\n ``` "
+}

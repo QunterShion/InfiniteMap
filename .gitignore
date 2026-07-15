@@ -1,0 +1,15 @@
+.DS_Store
+.cursor/
+dist
+lib
+config
+node_modules
+.vscode-test/
+webui/node_modules
+webui/bower_components
+testDir
+*.vsix
+types
+.tmp
+
+sync_config.jsonc

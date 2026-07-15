@@ -1,0 +1,154 @@
+{
+    "name": "infinite-map",
+    "displayName": "InfiniteMap",
+    "icon": "resources/icon.png",
+    "description": "InfiniteMap - an interactive mindmap editor for VS Code",
+    "version": "1.0.0",
+    "publisher": "chanterxiao",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/QunterShion/InfiniteMap.git"
+    },
+    "engines": {
+        "vscode": "^1.67.0"
+    },
+    "keywords": [
+        "naotu",
+        "脑图",
+        "导图",
+        "思维脑图",
+        "思维导图",
+        "百度脑图",
+        "km",
+        "mind",
+        "xmind"
+    ],
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onCustomEditor:infinite-map.editor"
+    ],
+    "main": "./dist/extension",
+    "contributes": {
+        "customEditors": [
+            {
+                "viewType": "infinite-map.editor",
+                "displayName": "InfiniteMap editor",
+                "selector": [
+                    {
+                        "filenamePattern": "*.km"
+                    },
+                    {
+                        "filenamePattern": "*.xmind"
+                    }
+                ],
+                "priority": "default"
+            }
+        ],
+        "configuration": {
+            "type": "object",
+            "title": "InfiniteMap",
+            "properties": {
+                "infiniteMap.language": {
+                    "type": "string",
+                    "enum": [
+                        "zh-cn",
+                        "zh-tw",
+                        "en",
+                        "de",
+                        "es",
+                        "fr",
+                        "it",
+                        "cs",
+                        "hu",
+                        "ja",
+                        "ko",
+                        "pl",
+                        "pt",
+                        "ru"
+                    ],
+                    "enumDescriptions": [
+                        "简体中文",
+                        "繁體中文",
+                        "English",
+                        "German",
+                        "Spanish",
+                        "French",
+                        "Italian",
+                        "Czech",
+                        "Hungarian",
+                        "Japanese",
+                        "Korean",
+                        "Polish",
+                        "Portuguese",
+                        "Russian"
+                    ],
+                    "description": "%infiniteMap.language%"
+                },
+                "infiniteMap.uploadUrl": {
+                    "type": "string",
+                    "default": "",
+                    "description": "%infiniteMap.uploadUrl%",
+                    "markdownDescription": "%infiniteMap.markdownDescription%"
+                },
+                "infiniteMap.imageScaleSize": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 10,
+                    "default": 2,
+                    "description": "%infiniteMap.imageScaleSize%"
+                },
+                "infiniteMap.imageBackgroundColor": {
+                    "type": "string",
+                    "default": "#ffffff",
+                    "description": "%infiniteMap.imageBackgroundColor%"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "build": "npm --prefix webui run build && npm run package && vsce package --out infinite-map-${npm_package_version}.vsix",
+        "compile": "tsc -p ./",
+        "typecheck": "tsc --noEmit -p ./",
+        "watch:types": "tsc --watch -p ./",
+        "watch": "webpack --watch --mode development",
+        "package": "webpack --mode production --devtool hidden-source-map",
+        "test": "npm run verify:assets && npm run test:provider && npm run typecheck && npm run lint && npm run mcp:build",
+        "test:provider": "node --test tests/mind-editor-provider.test.cjs",
+        "verify:assets": "node scripts/verify-assets.mjs",
+        "lint": "tslint -p tsconfig.json -c tslint.json",
+        "commit": "npm run package && git add . && git commit -m 'up'",
+        "major": "npm run commit && vsce publish major",
+        "minor": "npm run commit && vsce publish minor",
+        "patch": "npm run commit && vsce publish patch",
+        "web": "ovsx publish",
+        "mcp:build": "tsc -p tsconfig.mcp.json",
+        "mcp:start": "node dist/mcp/server.js",
+        "mcp:dev": "npx ts-node --project tsconfig.mcp.json src/mcp/server.ts"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@resvg/resvg-js": "^2.6.0",
+        "base64-js": "^1.5.1",
+        "jszip": "^3.6.0",
+        "request": "^2.88.2",
+        "string-replace-async": "^3.0.2",
+        "xmind": "^2.2.33",
+        "xml-formatter": "^3.6.0",
+        "xml-js": "^1.6.11"
+    },
+    "devDependencies": {
+        "@types/mocha": "^2.2.42",
+        "@types/node": "16.x",
+        "@types/vscode": "^1.67.0",
+        "@vscode/vsce": "^3.9.2",
+        "terser-webpack-plugin": "^3.0.2",
+        "ts-loader": "^9.2.5",
+        "ts-node": "^10.9.2",
+        "tslint": "^5.8.0",
+        "typescript": "5.0",
+        "webpack": "^5.52.1",
+        "webpack-cli": "^4.8.0"
+    }
+}

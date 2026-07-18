@@ -17,6 +17,8 @@ const SAVE_TIMEOUT_MS = 10000;
 interface DocumentState {
 	content: string;
 	dirty: boolean;
+	externalConflict: boolean;
+	lastDiskContent: string;
 }
 
 interface PendingSave {
@@ -30,6 +32,8 @@ interface PendingSave {
 export class MindEditorProvider implements vscode.CustomEditorProvider {
 	private activePanels = new Map<string, vscode.WebviewPanel>();
 	private documentStates = new Map<string, DocumentState>();
+	private documentWatchers = new Map<string, vscode.FileSystemWatcher>();
+	private externalChangeTimers = new Map<string, NodeJS.Timeout>();
 	private pendingSaves = new Map<string, PendingSave>();
 
 	constructor(public context: vscode.ExtensionContext) {
@@ -49,7 +53,12 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 
 	async revertCustomDocument(document: vscode.CustomDocument, _cancellation?: vscode.CancellationToken): Promise<void> {
 		const content = await this.getContent(document);
-		this.documentStates.set(document.uri.toString(), { content, dirty: false });
+		this.documentStates.set(document.uri.toString(), {
+			content,
+			dirty: false,
+			externalConflict: false,
+			lastDiskContent: content,
+		});
 		await this.postImport(document, content);
 	}
 
@@ -94,15 +103,26 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 		} else {
 			content = await this.readContent(uri.fsPath, path.extname(uri.fsPath));
 		}
-		this.documentStates.set(docKey, { content, dirty: Boolean(openContext.backupId) });
-		return {
+		const lastDiskContent = openContext.backupId && uri.scheme === 'file'
+			? await this.readContent(uri.fsPath, path.extname(uri.fsPath)).catch(() => content)
+			: content;
+		this.documentStates.set(docKey, {
+			content,
+			dirty: Boolean(openContext.backupId),
+			externalConflict: false,
+			lastDiskContent,
+		});
+		const document: vscode.CustomDocument = {
 			uri,
 			dispose: () => {
 				this.rejectPendingSave(docKey, new Error('Document closed before the save completed.'));
+				this.disposeDocumentWatcher(docKey);
 				this.documentStates.delete(docKey);
 				this.activePanels.delete(docKey);
 			},
 		};
+		this.watchDocument(document);
+		return document;
 	}
 
 	public saveCustomDocument(
@@ -213,8 +233,9 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 					switch (message.command) {
 						case 'loaded':
 							const state = this.getDocumentState(document);
-							if (!state.dirty) {
+							if (!state.dirty && !state.externalConflict) {
 								state.content = await this.getContent(document);
+								state.lastDiskContent = state.content;
 							}
 							await this.postImport(document, state.content);
 							return;
@@ -230,7 +251,9 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 								await this.completeSave(document, message.exportData);
 							} catch (ex) {
 								this.rejectPendingSave(docKey, ex instanceof Error ? ex : new Error(String(ex)));
-								console.error(ex);
+								if (!(ex instanceof Error && ex.message.includes('changed on disk'))) {
+									console.error(ex);
+								}
 							}
 							return;
 						case 'draft':
@@ -379,6 +402,13 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 		cancellation: vscode.CancellationToken
 	): Promise<void> {
 		const docKey = document.uri.toString();
+		if (destination.toString() === docKey && this.getDocumentState(document).externalConflict) {
+			const error = new Error(
+				'The mind map changed on disk while this editor had unsaved changes. Reload from disk or use Save As to avoid overwriting external edits.'
+			);
+			void vscode.window.showErrorMessage(error.message);
+			return Promise.reject(error);
+		}
 		this.rejectPendingSave(docKey, new Error('A newer save request replaced the previous request.'));
 		if (cancellation.isCancellationRequested) {
 			return Promise.reject(new Error('Save cancelled.'));
@@ -421,6 +451,11 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 		const pending = this.pendingSaves.get(docKey);
 		const destination = pending?.destination ?? document.uri;
 		const state = this.getDocumentState(document);
+		if (destination.toString() === docKey && state.externalConflict) {
+			throw new Error(
+				'The mind map changed on disk before the save completed. Reload from disk or use Save As to preserve both versions.'
+			);
+		}
 		state.content = content;
 		await this.persistContent(document, destination, content);
 		if (pending) {
@@ -436,13 +471,126 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 		destination: vscode.Uri,
 		content: string
 	): Promise<void> {
+		const writesOriginal = destination.toString() === document.uri.toString();
+		if (writesOriginal && document.uri.scheme === 'file') {
+			await this.assertDiskUnchanged(document);
+		}
 		const destinationExtension = path.extname(destination.fsPath) || path.extname(document.uri.fsPath);
 		await this.writeContent(destination.fsPath, destinationExtension, content);
-		if (destination.toString() === document.uri.toString()) {
+		if (writesOriginal) {
 			const state = this.getDocumentState(document);
 			state.content = content;
 			state.dirty = false;
+			state.externalConflict = false;
+			state.lastDiskContent = content;
 		}
+	}
+
+	private async assertDiskUnchanged(document: vscode.CustomDocument): Promise<void> {
+		const state = this.getDocumentState(document);
+		let diskContent: string;
+		try {
+			diskContent = await this.getContent(document);
+		} catch {
+			await this.markExternalConflict(document, 'The mind map is no longer available on disk.');
+			throw new Error('The mind map changed on disk before the save completed.');
+		}
+		if (diskContent !== state.lastDiskContent) {
+			await this.markExternalConflict(
+				document,
+				'The mind map changed on disk before the save completed.'
+			);
+			throw new Error(
+				'The mind map changed on disk before the save completed. Reload from disk or use Save As to preserve both versions.'
+			);
+		}
+	}
+
+	private watchDocument(document: vscode.CustomDocument): void {
+		if (document.uri.scheme !== 'file') {
+			return;
+		}
+		const docKey = document.uri.toString();
+		const watcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(path.dirname(document.uri.fsPath), path.basename(document.uri.fsPath))
+		);
+		watcher.onDidChange(() => this.scheduleExternalChange(document, false));
+		watcher.onDidCreate(() => this.scheduleExternalChange(document, false));
+		watcher.onDidDelete(() => this.scheduleExternalChange(document, true));
+		this.documentWatchers.set(docKey, watcher);
+	}
+
+	private scheduleExternalChange(document: vscode.CustomDocument, deleted: boolean): void {
+		const docKey = document.uri.toString();
+		const currentTimer = this.externalChangeTimers.get(docKey);
+		if (currentTimer) {
+			clearTimeout(currentTimer);
+		}
+		const timer = setTimeout(() => {
+			this.externalChangeTimers.delete(docKey);
+			void this.handleExternalChange(document, deleted).catch((error) => console.error(error));
+		}, 75);
+		this.externalChangeTimers.set(docKey, timer);
+	}
+
+	private async handleExternalChange(document: vscode.CustomDocument, deleted: boolean): Promise<void> {
+		const state = this.documentStates.get(document.uri.toString());
+		if (!state) {
+			return;
+		}
+
+		if (deleted) {
+			await this.markExternalConflict(document, 'The mind map was deleted outside InfiniteMap.');
+			return;
+		}
+
+		const content = await this.getContent(document);
+		if (content === state.content) {
+			state.externalConflict = false;
+			state.lastDiskContent = content;
+			return;
+		}
+
+		if (state.dirty) {
+			await this.markExternalConflict(
+				document,
+				'The mind map changed on disk while InfiniteMap has unsaved changes.'
+			);
+			return;
+		}
+
+		state.content = content;
+		state.externalConflict = false;
+		state.lastDiskContent = content;
+		await this.postImport(document, content);
+	}
+
+	private async markExternalConflict(document: vscode.CustomDocument, message: string): Promise<void> {
+		const state = this.getDocumentState(document);
+		if (state.externalConflict) {
+			return;
+		}
+		state.externalConflict = true;
+		const action = await vscode.window.showWarningMessage(
+			`${message} Saving is blocked to prevent data loss.`,
+			'Reload from Disk',
+			'Save As...'
+		);
+		if (action === 'Reload from Disk') {
+			await vscode.commands.executeCommand('workbench.action.files.revert');
+		} else if (action === 'Save As...') {
+			await vscode.commands.executeCommand('workbench.action.files.saveAs');
+		}
+	}
+
+	private disposeDocumentWatcher(docKey: string): void {
+		const timer = this.externalChangeTimers.get(docKey);
+		if (timer) {
+			clearTimeout(timer);
+			this.externalChangeTimers.delete(docKey);
+		}
+		this.documentWatchers.get(docKey)?.dispose();
+		this.documentWatchers.delete(docKey);
 	}
 
 	private rejectPendingSave(docKey: string, error: Error): void {

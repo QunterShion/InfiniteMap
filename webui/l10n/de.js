@@ -76,6 +76,11 @@ define(function(require, exports, module) {
                 'outline': 'Gliederung'
             },
             'search':'Suchen',
+            'search-placeholder': 'Suchen',
+            'replace': 'Ersetzen',
+            'replace-placeholder': 'Ersetzen durch',
+            'replace-all': 'Alle ersetzen',
+            'replace-count': 'Ersetzungen',
             'expandtoleaf': 'Erweitern',
             'back': 'Zurück',
             'undo': 'Rückgängig',

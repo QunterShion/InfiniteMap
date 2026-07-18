@@ -76,6 +76,11 @@ define(function(require, exports, module) {
                 'outline': '大綱'
             },
             'search':'搜尋',
+            'search-placeholder': '尋找',
+            'replace': '取代',
+            'replace-placeholder': '取代為',
+            'replace-all': '全部取代',
+            'replace-count': '處已取代',
             'expandtoleaf': '展開',
             'back': '返回',
             'undo': '復原 (Ctrl + Z)',

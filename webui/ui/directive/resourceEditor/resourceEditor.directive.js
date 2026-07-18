@@ -9,18 +9,35 @@ angular.module('kityminderEditor')
             replace: true,
             controller: function ($scope) {
                 var minder = $scope.minder;
+                var builtInResources = ['已完成', '待拆解'];
 
 	            var isInteracting = false;
+
+                function getAvailableResources(selected) {
+                    var resourceNames = minder.getUsedResource().slice();
+                    builtInResources.forEach(function(resourceName) {
+                        if (resourceNames.indexOf(resourceName) == -1) {
+                            resourceNames.push(resourceName);
+                        }
+                    });
+
+                    return resourceNames.map(function(resourceName) {
+                        return {
+                            name: resourceName,
+                            selected: selected.indexOf(resourceName) > -1
+                        };
+                    });
+                }
+
+                var initialEnabled = $scope.enabled = minder.queryCommandState('resource') != -1;
+                var initialSelected = initialEnabled ? minder.queryCommandValue('resource') : [];
+                var skipInitialWatch = true;
+                $scope.used = getAvailableResources(initialSelected);
 
                 minder.on('interactchange', function () {
                     var enabled = $scope.enabled = minder.queryCommandState('resource') != -1;
                     var selected = enabled ? minder.queryCommandValue('resource') : [];
-                    var used = minder.getUsedResource().map(function (resourceName) {
-                        return {
-                            name: resourceName,
-                            selected: selected.indexOf(resourceName) > -1
-                        }
-                    });
+                    var used = getAvailableResources(selected);
                     $scope.used = used;
 
 	                isInteracting = true;
@@ -29,6 +46,10 @@ angular.module('kityminderEditor')
                 });
 
                 $scope.$watch('used', function (used) {
+                    if (skipInitialWatch) {
+                        skipInitialWatch = false;
+                        return;
+                    }
                     if (minder.queryCommandState('resource') != -1 && used) {
                         var resource = used.filter(function (resource) {
                             return resource.selected;

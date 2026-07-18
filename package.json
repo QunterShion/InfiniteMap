@@ -115,7 +115,7 @@
         "watch": "webpack --watch --mode development",
         "package": "webpack --mode production --devtool hidden-source-map",
         "test": "npm run verify:assets && npm run test:provider && npm run typecheck && npm run lint && npm run mcp:build",
-        "test:provider": "node --test tests/mind-editor-provider.test.cjs",
+        "test:provider": "node --test tests/*.test.cjs",
         "verify:assets": "node scripts/verify-assets.mjs",
         "lint": "tslint -p tsconfig.json -c tslint.json",
         "commit": "npm run package && git add . && git commit -m 'up'",

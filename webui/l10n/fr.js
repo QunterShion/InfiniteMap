@@ -76,6 +76,11 @@ define(function(require, exports, module) {
                 'outline': 'contour'
             },
             'search': 'Recherche',
+            'search-placeholder': 'Rechercher',
+            'replace': 'Remplacer',
+            'replace-placeholder': 'Remplacer par',
+            'replace-all': 'Tout remplacer',
+            'replace-count': 'remplacements',
             'expandtoleaf': 'Déplier',
             'back': 'retour',
             'undo': 'Annuler (Ctrl + Z)',

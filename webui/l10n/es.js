@@ -76,6 +76,11 @@ define(function(require, exports, module) {
                 'outline': 'contorno'
             },
             'search': 'Buscar',
+            'search-placeholder': 'Buscar',
+            'replace': 'Reemplazar',
+            'replace-placeholder': 'Reemplazar con',
+            'replace-all': 'Reemplazar todo',
+            'replace-count': 'reemplazos',
             'expandtoleaf': 'Expandir',
             'back': 'atras',
             'undo': 'Deshacer (Ctrl + Z)',

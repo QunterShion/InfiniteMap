@@ -1,0 +1,12 @@
+{
+    "folders": [
+        {
+            "name": "InfiniteMap",
+            "path": "."
+        }
+    ],
+    "settings": {
+        "git.autoRepositoryDetection": true,
+        "git.openRepositoryInParentFolders": "never"
+    }
+}

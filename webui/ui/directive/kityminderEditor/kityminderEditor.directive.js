@@ -10,7 +10,39 @@ angular.module('kityminderEditor')
 			link: function(scope, element, attributes) {
 				var $minderEditor = element.children('.minder-editor')[0];
 
+				function installModifierWheelZoom(minder) {
+					var accumulatedDelta = 0;
+					var zoomTimer;
+
+					minder.on('premousewheel', function(e) {
+						var originEvent = e.originEvent;
+						if (!originEvent || (!originEvent.ctrlKey && !originEvent.metaKey)) {
+							return;
+						}
+
+						var delta = typeof originEvent.wheelDelta == 'number' ?
+							originEvent.wheelDelta :
+							-originEvent.deltaY;
+						if (!delta) {
+							return;
+						}
+
+						// macOS pinch gestures and Cmd + wheel share the same wheel event.
+						// Positive native delta means fingers move apart / wheel moves up.
+						e.stopPropagation();
+						originEvent.preventDefault();
+						accumulatedDelta += delta;
+
+						clearTimeout(zoomTimer);
+						zoomTimer = setTimeout(function() {
+							minder.execCommand(accumulatedDelta > 0 ? 'zoomin' : 'zoomout');
+							accumulatedDelta = 0;
+						}, 80);
+					});
+				}
+
 				function onInit(editor, minder) {
+					installModifierWheelZoom(minder);
 					scope.onInit({
 						editor: editor,
 						minder: minder

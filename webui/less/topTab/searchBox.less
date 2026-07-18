@@ -5,12 +5,16 @@
     position: relative;
     top: 0;
     z-index: 3;
-    width: 360px;
+    width: 460px;
     height: 40px;
     padding: 3px 6px;
     opacity: 1;
 
-    .search-input-wrap, .prev-and-next-btn {
+    &.replace-open {
+        height: 74px;
+    }
+
+    .search-input-wrap, .prev-and-next-btn, .replace-toggle {
         float: left;
     }
 
@@ -37,7 +41,7 @@
     }
 
     .search-input-wrap {
-        width: 240px;
+        width: 300px;
     }
 
     .prev-and-next-btn {
@@ -46,6 +50,34 @@
         .btn:focus {
             outline: none;
         }
+    }
+
+    .replace-toggle {
+        margin-left: 5px;
+    }
+
+    .replace-row {
+        clear: both;
+        padding-top: 4px;
+    }
+
+    .replace-input {
+        float: left;
+        width: 210px;
+    }
+
+    .replace-btns {
+        float: left;
+        margin-left: 5px;
+    }
+
+    .replace-count {
+        float: right;
+        max-width: 82px;
+        overflow: hidden;
+        padding-top: 6px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .search-input {

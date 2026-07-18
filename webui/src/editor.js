@@ -28,6 +28,7 @@ define(function(require, exports, module) {
     assemble(require('./runtime/container'));
     assemble(require('./runtime/fsm'));
     assemble(require('./runtime/minder'));
+    assemble(require('./runtime/node-id'));
     assemble(require('./runtime/receiver'));
     assemble(require('./runtime/hotbox'));
     assemble(require('./runtime/input'));

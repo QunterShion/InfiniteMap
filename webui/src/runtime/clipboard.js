@@ -16,6 +16,7 @@ define(function(require, exports, module) {
 		var fsm = this.fsm;
 		var receiver = this.receiver;
 		var MimeType = this.MimeType;
+		var nodeIdManager = this.nodeIdManager;
 
 		var kmencode = MimeType.getMimeTypeProtocol('application/km'),
 			decode = Data.getRegisterProtocol('json').decode;
@@ -44,8 +45,8 @@ define(function(require, exports, module) {
 					case 'normal': {
 						var nodes = [].concat(minder.getSelectedNodes());
 						if (nodes.length) {
-							// 这里由于被粘贴复制的节点的id信息也都一样，故做此算法
-							// 这里有个疑问，使用node.getParent()或者node.parent会离奇导致出现非选中节点被渲染成选中节点，因此使用isAncestorOf，而没有使用自行回溯的方式
+							// 排除已选中祖先节点的后代，避免同一棵子树被重复复制。
+							// 使用 isAncestorOf 避免直接读取 parent 导致旧版渲染状态异常。
 							if (nodes.length > 1) {
 								var targetLevel;
 								nodes.sort(function(a, b) {
@@ -143,6 +144,7 @@ define(function(require, exports, module) {
 								for (var i = nodes.length-1; i >= 0; i--) {
 									_node = minder.createNode(null, node);
 									minder.importNode(_node, nodes[i]);
+									nodeIdManager.assignFreshSubtree(_node);
 									_selectedNodes.push(_node);
 									node.appendChild(_node);
 								}

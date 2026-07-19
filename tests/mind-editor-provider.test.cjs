@@ -84,6 +84,15 @@ const warningMessages = [];
 const errorMessages = [];
 const executedCommands = [];
 const commandHandlers = new Map();
+const tabChangeHandlers = new Set();
+const tabGroups = {
+  all: [],
+  onDidChangeTabs: (handler) => {
+    tabChangeHandlers.add(handler);
+    return { dispose: () => tabChangeHandlers.delete(handler) };
+  },
+};
+let nextWarningAction;
 const vscode = {
   CancellationToken: { None: undefined },
   EventEmitter: MockEventEmitter,
@@ -109,13 +118,16 @@ const vscode = {
   },
   window: {
     registerCustomEditorProvider: () => ({ dispose: () => undefined }),
+    tabGroups,
     showErrorMessage: async (message) => {
       errorMessages.push(message);
       return undefined;
     },
     showWarningMessage: async (message) => {
       warningMessages.push(message);
-      return undefined;
+      const action = nextWarningAction;
+      nextWarningAction = undefined;
+      return action;
     },
   },
 };
@@ -216,6 +228,36 @@ function createPanel({ initialHtml = '', visible = true } = {}) {
     },
   };
 }
+
+test('detects an unrebound custom editor without reopening or replacing its tab', async () => {
+  const uri = MockUri.file('/workspace/recovery.km');
+  tabGroups.all = [{
+    tabs: [{
+      input: { uri, viewType: 'infinite-map.editor' },
+      isActive: true,
+      isDirty: true,
+      label: 'recovery.km',
+    }],
+  }];
+  const provider = new MindEditorProvider({ extensionPath: path.resolve(__dirname, '..'), subscriptions: [] });
+  const warnedUris = new Set();
+  const warningCountBefore = warningMessages.length;
+  const reloadCountBefore = executedCommands.filter(([command]) => command === 'workbench.action.reloadWindow').length;
+
+  nextWarningAction = 'Reload Window';
+  provider.scanForUnreboundEditors(tabGroups, 'test', warnedUris);
+  provider.scanForUnreboundEditors(tabGroups, 'test-repeat', warnedUris);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(warningMessages.length, warningCountBefore + 1);
+  assert.match(warningMessages.at(-1), /did not reattach/);
+  assert.equal(
+    executedCommands.filter(([command]) => command === 'workbench.action.reloadWindow').length,
+    reloadCountBefore + 1
+  );
+  assert.equal(executedCommands.some(([command]) => command === 'vscode.openWith'), false);
+  tabGroups.all = [];
+});
 
 test('custom document keeps drafts in memory and completes the save contract', async (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-provider-'));

@@ -3,18 +3,80 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { selectFile, getRootUri, changeSvgImg } from "./util";
 import { extensionHostSessionId, logLifecycle } from './lifecycle';
-const xmindparser = require('./xmindparser');
-let parser = new xmindparser();
-
-const { Resvg, initWasm } = require('./wasm');
-const index_bg = fs.readFileSync(path.join(__dirname, '../webui/resvg-js/index_bg.wasm'));
-initWasm(index_bg);
 const fontPath = path.join(__dirname, '../webui/resvg-js/fonts/Alibaba_PuHuiTi_2.0_45_Light_45_Light.ttf');
 
 const matchableFileTypes: string[] = ['xmind', 'km', 'svg'];
 const viewType = 'infinite-map.editor';
 const SAVE_TIMEOUT_MS = 10000;
 const IMPORT_TIMEOUT_MS = 10000;
+const PROVIDER_REBOUND_CHECK_DELAY_MS = 5000;
+
+interface XmindParser {
+	xmindToJSON(filePath: string): Promise<any>;
+	JSONToXmind(content: any, filePath: string): Promise<void>;
+}
+
+interface ResvgRuntime {
+	Resvg: new (svg: string, options?: Record<string, unknown>) => { render(): { asPng(): Uint8Array } };
+	initWasm(input: Uint8Array): Promise<void>;
+}
+
+let parser: XmindParser | undefined;
+let resvgRuntime: ResvgRuntime | undefined;
+let resvgInitialization: Promise<void> | undefined;
+
+function getParser(): XmindParser {
+	if (!parser) {
+		try {
+			const Parser = require('./xmindparser');
+			parser = new Parser();
+			logLifecycle('runtime.xmindParser.initialized');
+		} catch (error) {
+			logLifecycle('runtime.xmindParser.failed', {
+				error: error instanceof Error ? error.stack || error.message : String(error),
+			});
+			throw error;
+		}
+	}
+	return parser!;
+}
+
+async function getResvgRuntime(): Promise<ResvgRuntime> {
+	if (!resvgRuntime) {
+		try {
+			resvgRuntime = require('./wasm') as ResvgRuntime;
+			logLifecycle('runtime.resvg.loaded');
+		} catch (error) {
+			logLifecycle('runtime.resvg.loadFailed', {
+				error: error instanceof Error ? error.stack || error.message : String(error),
+			});
+			throw error;
+		}
+	}
+	if (!resvgInitialization) {
+		try {
+			const indexBg = fs.readFileSync(path.join(__dirname, '../webui/resvg-js/index_bg.wasm'));
+			resvgInitialization = resvgRuntime.initWasm(indexBg).then(
+				() => {
+					logLifecycle('runtime.resvg.initialized');
+				},
+				(error: unknown) => {
+					logLifecycle('runtime.resvg.initializationFailed', {
+						error: error instanceof Error ? error.stack || error.message : String(error),
+					});
+					throw error;
+				}
+			);
+		} catch (error) {
+			logLifecycle('runtime.resvg.initializationFailed', {
+				error: error instanceof Error ? error.stack || error.message : String(error),
+			});
+			throw error;
+		}
+	}
+	await resvgInitialization;
+	return resvgRuntime;
+}
 
 interface DocumentState {
 	content: string;
@@ -88,7 +150,123 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 			retainContextWhenHidden: true,
 			supportsMultipleEditorsPerDocument: false,
 		});
-		return providerRegistration;
+		const recoveryMonitor = provider.startRecoveryMonitor();
+		return {
+			dispose: () => {
+				recoveryMonitor?.dispose();
+				providerRegistration.dispose();
+			},
+		};
+	}
+
+	private startRecoveryMonitor(): vscode.Disposable | undefined {
+		const tabGroups = (vscode.window as any).tabGroups as vscode.TabGroups | undefined;
+		if (!tabGroups || typeof tabGroups.onDidChangeTabs !== 'function') {
+			logLifecycle('providerRecoveryMonitor.unavailable', { viewType });
+			return undefined;
+		}
+
+		let disposed = false;
+		let scanTimer: NodeJS.Timeout | undefined;
+		const warnedUris = new Set<string>();
+		const scheduleScan = (reason: string) => {
+			if (scanTimer) {
+				clearTimeout(scanTimer);
+			}
+			scanTimer = setTimeout(() => {
+				scanTimer = undefined;
+				if (disposed) {
+					return;
+				}
+				this.scanForUnreboundEditors(tabGroups, reason, warnedUris);
+			}, PROVIDER_REBOUND_CHECK_DELAY_MS);
+		};
+
+		const tabsSubscription = tabGroups.onDidChangeTabs((event: vscode.TabChangeEvent) => {
+			for (const tab of event.closed) {
+				const input = tab.input as { uri?: vscode.Uri; viewType?: string };
+				if (input?.viewType === viewType && input.uri) {
+					warnedUris.delete(input.uri.toString());
+				}
+			}
+			scheduleScan('tabs-changed');
+		});
+		scheduleScan('provider-registered');
+
+		return {
+			dispose: () => {
+				disposed = true;
+				if (scanTimer) {
+					clearTimeout(scanTimer);
+					scanTimer = undefined;
+				}
+				tabsSubscription.dispose();
+				warnedUris.clear();
+			},
+		};
+	}
+
+	private scanForUnreboundEditors(
+		tabGroups: vscode.TabGroups,
+		reason: string,
+		warnedUris: Set<string>
+	): void {
+		const unresolved: Array<{ uri: vscode.Uri; tab: vscode.Tab }> = [];
+		for (const group of tabGroups.all) {
+			for (const tab of group.tabs) {
+				const input = tab.input as { uri?: vscode.Uri; viewType?: string };
+				// Inactive restored tabs may be intentionally lazy. Selecting one fires
+				// onDidChangeTabs and schedules a fresh check.
+				if (!tab.isActive || input?.viewType !== viewType || !input.uri) {
+					continue;
+				}
+				const docKey = input.uri.toString();
+				if (!this.activePanels.has(docKey)) {
+					unresolved.push({ uri: input.uri, tab });
+				}
+			}
+		}
+		const unresolvedUris = new Set(unresolved.map(({ uri }) => uri.toString()));
+		for (const warnedUri of warnedUris) {
+			if (!unresolvedUris.has(warnedUri)) {
+				warnedUris.delete(warnedUri);
+			}
+		}
+		if (unresolved.length === 0) {
+			return;
+		}
+
+		for (const { uri, tab } of unresolved) {
+			const docKey = uri.toString();
+			if (warnedUris.has(docKey)) {
+				continue;
+			}
+			warnedUris.add(docKey);
+			logLifecycle('provider-not-rebound', {
+				viewType,
+				documentUri: docKey,
+				reason,
+				tabLabel: tab.label,
+				tabDirty: tab.isDirty,
+				tabActive: tab.isActive ?? null,
+				tabViewColumn: tab.group?.viewColumn ?? null,
+				panelObjectAvailable: false,
+			});
+			void Promise.resolve(vscode.window.showWarningMessage(
+				'InfiniteMap editor is still open, but the Extension Host did not reattach it. Reload the VS Code window to restore it.',
+				'Reload Window'
+			)).then((action) => {
+				if (action === 'Reload Window') {
+					return vscode.commands.executeCommand('workbench.action.reloadWindow');
+				}
+				return undefined;
+			}).catch((error: unknown) => {
+				logLifecycle('providerRecoveryMonitor.actionFailed', {
+					documentUri: docKey,
+					error: error instanceof Error ? error.stack || error.message : String(error),
+				});
+			});
+		}
 	}
 
 	async revertCustomDocument(document: vscode.CustomDocument, _cancellation?: vscode.CancellationToken): Promise<void> {
@@ -738,14 +916,26 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 									return;
 							}
 
-								if (fileType === 'xmind') {
-								parser.xmindToJSON(importFileUri.fsPath).then((json: any) => {
-									panel.webview.postMessage({
-										command: 'importNewData',
-										content: json,
-										basename,
+							if (fileType === 'xmind') {
+								void Promise.resolve()
+									.then(() => getParser().xmindToJSON(importFileUri.fsPath))
+									.then((json: any) => {
+										return panel.webview.postMessage({
+											command: 'importNewData',
+											content: json,
+											basename,
+										});
+									})
+									.catch((error) => {
+										logLifecycle('webview.importFile.failed', {
+											documentUri: docKey,
+											panelId,
+											error: error instanceof Error ? error.stack || error.message : String(error),
+										});
+										void vscode.window.showErrorMessage(
+											`Unable to import XMind: ${error instanceof Error ? error.message : String(error)}`
+										);
 									});
-								});
 							} else {
 								let content: any = fs.readFileSync(importFileUri.fsPath, 'utf-8');
 								panel.webview.postMessage({
@@ -758,49 +948,60 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 
 						break;
 						case 'export': {
-							const filters: Record<string, string[]> = { 'All Files': ['*'] };
-							if (message.type === 'xmind') {
-								filters['Text Files'] = ['xmind'];
-							} else if (message.type === 'png') {
-								filters['Images Files'] = ['png'];
-							}
-
-							const rootUri = getRootUri();
-							if (!rootUri) {
-								break;
-							}
-							const uri = await vscode.window.showSaveDialog({
-								defaultUri: vscode.Uri.file(path.join(rootUri.fsPath, `${message.filename}.${message.type}`)),
-								filters,
-							});
-							if (!uri) {
-								break;
-							}
-
-							if (message.type === 'xmind') {
-								await parser.JSONToXmind(JSON.parse(message.content), uri.fsPath);
-							} else if (message.type === 'png') {
-								const svg = await changeSvgImg(message.content);
-								if (svg) {
-									const fontBuffer = await fs.promises.readFile(path.resolve(fontPath));
-									const resvg = new Resvg(svg, {
-										background: mindmapConfig.get<string>('imageBackgroundColor', '#ffffff'),
-										fitTo: {
-											mode: 'zoom',
-											value: mindmapConfig.get<number>('imageScaleSize', 2),
-										},
-										font: { fontBuffers: [fontBuffer], loadSystemFonts: false },
-									});
-									await fs.promises.writeFile(uri.fsPath, resvg.render().asPng());
+							try {
+								const filters: Record<string, string[]> = { 'All Files': ['*'] };
+								if (message.type === 'xmind') {
+									filters['Text Files'] = ['xmind'];
+								} else if (message.type === 'png') {
+									filters['Images Files'] = ['png'];
 								}
-							} else if (message.type === 'json') {
-								await fs.promises.writeFile(
-									uri.fsPath,
-									JSON.stringify(JSON.parse(message.content), null, '\t'),
-									'utf8'
-								);
-							} else {
-								await fs.promises.writeFile(uri.fsPath, message.content, 'utf8');
+
+								const rootUri = getRootUri();
+								if (!rootUri) {
+									break;
+								}
+								const uri = await vscode.window.showSaveDialog({
+									defaultUri: vscode.Uri.file(path.join(rootUri.fsPath, `${message.filename}.${message.type}`)),
+									filters,
+								});
+								if (!uri) {
+									break;
+								}
+
+								if (message.type === 'xmind') {
+									await getParser().JSONToXmind(JSON.parse(message.content), uri.fsPath);
+								} else if (message.type === 'png') {
+									const { Resvg } = await getResvgRuntime();
+									const svg = await changeSvgImg(message.content);
+									if (svg) {
+										const fontBuffer = await fs.promises.readFile(path.resolve(fontPath));
+										const resvg = new Resvg(svg, {
+											background: mindmapConfig.get<string>('imageBackgroundColor', '#ffffff'),
+											fitTo: {
+												mode: 'zoom',
+												value: mindmapConfig.get<number>('imageScaleSize', 2),
+											},
+											font: { fontBuffers: [fontBuffer], loadSystemFonts: false },
+										});
+										await fs.promises.writeFile(uri.fsPath, resvg.render().asPng());
+									}
+								} else if (message.type === 'json') {
+									await fs.promises.writeFile(
+										uri.fsPath,
+										JSON.stringify(JSON.parse(message.content), null, '\t'),
+										'utf8'
+									);
+								} else {
+									await fs.promises.writeFile(uri.fsPath, message.content, 'utf8');
+								}
+							} catch (error) {
+								logLifecycle('webview.export.failed', {
+									documentUri: docKey,
+									panelId,
+									exportType: message.type ?? null,
+									error: error instanceof Error ? error.stack || error.message : String(error),
+								});
+								void vscode.window.showErrorMessage(`Unable to export the mind map: ${error instanceof Error ? error.message : String(error)}`);
 							}
 							break;
 						}
@@ -1352,7 +1553,7 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 	private async readContent(filePath: string, extension: string): Promise<string> {
 		switch (extension.toLowerCase()) {
 			case '.xmind': {
-				const data = await parser.xmindToJSON(filePath);
+				const data = await getParser().xmindToJSON(filePath);
 				return JSON.stringify(data) || '{}';
 			}
 			case '.km':
@@ -1365,7 +1566,7 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 
 	private async writeContent(filePath: string, extension: string, content: string): Promise<void> {
 		if (extension.toLowerCase() === '.xmind') {
-			await parser.JSONToXmind(JSON.parse(content), filePath);
+			await getParser().JSONToXmind(JSON.parse(content), filePath);
 			return;
 		}
 		await fs.promises.writeFile(filePath, content, 'utf8');

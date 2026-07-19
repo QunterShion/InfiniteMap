@@ -142,3 +142,25 @@ session=65e54d... panelId=1 ready=c8bb81e2...
    `Developer: Reload Window`，并把该状态记为 `provider-not-rebound`。
 8. 保留激活失败、resolve 异常、reconnect 超时和 HTML reset reason 日志；诊断结束后可设置
    `INFINITEMAP_LIFECYCLE_DEBUG=0` 关闭临时日志。
+
+## 优化实施结果
+
+以上建议已按公开 API 能力边界完成落地：
+
+1. Provider 继续在 `activate()` 中同步注册。XMind parser 和 Resvg/WASM 已改为首次读写 XMind、首次导出
+   PNG 时才加载和初始化，模块加载阶段不再读取 WASM 或创建 parser，避免非核心运行时故障阻断 Provider 注册。
+2. 每次 `resolveCustomEditor` 继续重新登记 URI/面板、重设 Webview options、清理旧 binding，并重挂消息、
+   dispose、view-state 和 heartbeat 监听；空 HTML 会重建，保留 HTML 会先走 reconnect。
+3. Webview 启动继续发送带 `webviewSessionId` 的 `loaded`，Provider 同时接受 `ready`，两者都会重新 import
+   当前文档状态；刷新 import 继续等待显式 `importResult`。
+4. Provider 注册后新增恢复监视器：每次注册及标签变化后等待 5 秒，扫描相同 `viewType` 且当前活动的
+   `TabInputCustom`。若活动标签仍存在但当前 Extension Host 没有对应可用面板，则记录
+   `provider-not-rebound`，每个 URI 只提示一次，可由用户确认执行 `Developer: Reload Window`；未选中的
+   懒恢复标签不会误报，用户选中后会触发新一轮检测。
+5. 恢复监视器不会调用 `vscode.openWith`，不会自动关闭、替换或重复打开标签，因此不会主动破坏现存标签
+   中可能尚未落盘的状态。公开 API 仍无法直接接管这类孤儿面板。
+6. XMind 导入及 Resvg 加载/初始化失败均记录独立生命周期事件；现有激活、resolve、reconnect、HTML reset、
+   refresh timeout 日志继续保留。
+
+自动化验证覆盖了孤儿标签检测、单次提示、用户确认后 Reload Window，以及不调用 `vscode.openWith`；完整
+测试、typecheck、lint、MCP build、Webpack/VSIX 构建均作为交付校验执行。

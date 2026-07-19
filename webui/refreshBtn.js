@@ -1,68 +1,162 @@
 /**
- * infiniteMap 刷新按钮注入脚本
- * 在 kityminder.editor.min.js 之后、main.js 之前加载
- * 用 jQuery 直接操作 DOM + 绑定事件
+ * infiniteMap refresh button injection script.
+ * Loaded after kityminder.editor.min.js and before main.js.
  */
 (function() {
+    var RETRY_DELAY = 100;
+    var REFRESH_TIMEOUT = 15000;
+    var STYLE_ID = 'infinite-map-refresh-style';
+    var refreshSequence = 0;
+    var activeRefreshId;
+    var activeRefreshTimer;
+    var $activeRefreshBtn;
+    var activeDraftSuppression;
+
+    // Angular renders the toolbar asynchronously. Retry until the undo/redo
+    // group exists instead of assuming that the tab strip is enough.
     function injectRefreshBtn() {
-        var $tabs = $('.nav-tabs');
-        if (!$tabs.length) {
-            setTimeout(injectRefreshBtn, 200);
+        var $doGroup = $('.do-group');
+        if (!$doGroup.length) {
+            setTimeout(injectRefreshBtn, RETRY_DELAY);
             return;
         }
 
-        if ($('.refresh-from-disk-btn').length) {
+        if ($doGroup.find('.refresh-from-disk-btn').length || $('.refresh-from-disk-btn').length) {
             return;
         }
 
-        // 注入 CSS：刷新按钮与 undo/redo 同风格
-        // 使用标准 SVG data-uri 作为背景，展示国际通用的顺时针旋转刷新图标
-        // 使用标准刷新 SVG 图标，base64 内联
-        // 源文件: 50-Opensource/刷新.svg
-        var svgData = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><path d="M960 64v256H704l96.256-96.256C741.376 168.128 652.16 128 551.68 128 306.432 128 106.432 319.36 94.592 560H94.72v120H32.128C32.064 267.264 264.704 31.488 551.68 31.488c169.216 0 320.576 80.256 418.112 204.48L1024 176 960 64zM64 960V704h256l-96.256 96.256C282.624 856.128 371.84 896 472.32 896c245.248 0 445.248-191.36 457.088-432h0.128v-120h62.592c0.064 412.736-232.576 648.512-519.616 648.512-169.216 0-320.576-80.256-418.112-204.48L0 848 64 960z"/></svg>';
-        var dataUri = 'url(data:image/svg+xml;base64,' + btoa(svgData) + ')';
+        ensureRefreshStyle();
 
-        var css = ''
-            + '.refresh .km-btn-icon{'
-            +   'display:inline-block;width:20px;height:20px;'
-            +   'background-image:' + dataUri + ';'
-            +   'background-size:20px 20px;'
-            +   'background-position:center center;'
-            +   'background-repeat:no-repeat;'
-            +   'opacity:0.6;'
-            + '}'
-            + '.refresh:hover .km-btn-icon{'
-            +   'opacity:1;'
-            + '}';
-
-        $('<style>').text(css).appendTo('head');
-
-        // 按钮 HTML，纯 ICON 无文字
+        // Match oorzc.mind-map's refresh glyph while keeping keyboard support.
         var $refreshBtn = $(
-            '<div class="km-btn-item refresh refresh-from-disk-btn" title="从磁盘刷新 (Refresh from Disk)">' +
-            '  <i class="km-btn-icon"></i>' +
+            '<div id="infinite-map-refresh-btn" class="km-btn-item refresh-from-disk-btn"' +
+            ' role="button" tabindex="0" aria-label="从磁盘刷新 (Refresh from Disk)"' +
+            ' title="从磁盘刷新 (Refresh from Disk)">' +
+            '  <span class="km-btn-icon">' +
+            '    <svg class="mindmap-refresh-icon" viewBox="0 0 24 24" fill="none"' +
+            '      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '      <path d="M21 12a9 9 0 0 1-15.5 6.2L3 15"></path>' +
+            '      <path d="M3 21v-6h6"></path>' +
+            '      <path d="M3 12a9 9 0 0 1 15.5-6.2L21 9"></path>' +
+            '      <path d="M21 3v6h-6"></path>' +
+            '    </svg>' +
+            '  </span>' +
             '</div>'
         );
 
-		$refreshBtn.on('click', function(e) {
-			e.preventDefault();
-			window.mindmapSuppressDraft = true;
-			window.clearTimeout(window.mindmapSuppressDraftTimer);
-			window.vscode.postMessage({
-                command: 'refresh'
-            });
+        $refreshBtn.on('click', function(e) {
+            e.preventDefault();
+            requestRefresh($refreshBtn);
+        });
+        $refreshBtn.on('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ' || e.keyCode === 13 || e.keyCode === 32) {
+                e.preventDefault();
+                requestRefresh($refreshBtn);
+            }
         });
 
-        // 注入到 do-group (undo/redo按钮组) 内部，放在 redo 按钮后面
-        var $doGroup = $('.do-group');
-        if ($doGroup.length) {
-            // 扩展 do-group 宽度：原来 38px 容纳 2 个按钮，现在增加到容纳 3 个
-            $doGroup.css('width', '57px');
-            $doGroup.append($refreshBtn);
+        $doGroup.append($refreshBtn);
+    }
+
+    function ensureRefreshStyle() {
+        if (document.getElementById(STYLE_ID)) {
+            return;
+        }
+
+        // These values intentionally mirror oorzc.mind-map@1.0.6.
+        var css = ''
+            + '.refresh-from-disk-btn .km-btn-icon{'
+            +   'background:none;box-sizing:border-box;color:#555;line-height:0;text-align:center;'
+            + '}'
+            + '.refresh-from-disk-btn .mindmap-refresh-icon{'
+            +   'width:16px;height:16px;margin:2px;stroke:currentColor;'
+            + '}'
+            + '.refresh-from-disk-btn:hover .km-btn-icon,'
+            + '.refresh-from-disk-btn:focus .km-btn-icon{color:#222;}'
+            + '.refresh-from-disk-btn[aria-disabled="true"]{'
+            +   'pointer-events:none;opacity:0.5;'
+            + '}';
+
+        $('<style id="' + STYLE_ID + '">').text(css).appendTo('head');
+    }
+
+    function createRefreshId() {
+        refreshSequence += 1;
+        return (window.infiniteMapWebviewSessionId || 'webview') + ':refresh:' + refreshSequence;
+    }
+
+    function requestRefresh($refreshBtn) {
+        if (activeRefreshId || !window.vscode || typeof window.vscode.postMessage !== 'function') {
+            return;
+        }
+
+        var requestId = createRefreshId();
+        activeRefreshId = requestId;
+        activeDraftSuppression = 'refresh-pending:' + requestId;
+        if (typeof window.infiniteMapAcquireDraftSuppression === 'function') {
+            window.infiniteMapAcquireDraftSuppression(activeDraftSuppression);
+        } else {
+            window.infiniteMapRefreshDraftSuppression = activeDraftSuppression;
+            window.mindmapSuppressDraft = true;
+        }
+        $activeRefreshBtn = $refreshBtn;
+        $refreshBtn.attr('aria-disabled', 'true').attr('aria-busy', 'true');
+        activeRefreshTimer = window.setTimeout(function() {
+            finishRefresh(requestId);
+        }, REFRESH_TIMEOUT);
+
+        try {
+            // acquireVsCodeApi().postMessage() returns void. Completion arrives
+            // through an explicit refreshResult message from the provider.
+            window.vscode.postMessage({ command: 'refresh', requestId: requestId });
+        } catch (error) {
+            finishRefresh(requestId);
         }
     }
 
+    function finishRefresh(requestId) {
+        if (!activeRefreshId || requestId !== activeRefreshId) {
+            return;
+        }
+        window.clearTimeout(activeRefreshTimer);
+        if ($activeRefreshBtn) {
+            $activeRefreshBtn.removeAttr('aria-disabled').removeAttr('aria-busy');
+        }
+        if (activeDraftSuppression) {
+            if (typeof window.infiniteMapReleaseDraftSuppression === 'function') {
+                window.infiniteMapReleaseDraftSuppression(activeDraftSuppression);
+            } else {
+                window.infiniteMapRefreshDraftSuppression = undefined;
+                window.mindmapSuppressDraft = false;
+            }
+        }
+        activeRefreshId = undefined;
+        activeRefreshTimer = undefined;
+        $activeRefreshBtn = undefined;
+        activeDraftSuppression = undefined;
+    }
+
+    function watchToolbar() {
+        if (!window.MutationObserver || !document.body) {
+            return;
+        }
+        var observer = new window.MutationObserver(function() {
+            if (!document.getElementById('infinite-map-refresh-btn')) {
+                injectRefreshBtn();
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    window.addEventListener('message', function(event) {
+        var message = event.data;
+        if (message && message.command === 'refreshResult') {
+            finishRefresh(message.requestId);
+        }
+    });
+
     $(document).ready(function() {
-        setTimeout(injectRefreshBtn, 500);
+        injectRefreshBtn();
+        watchToolbar();
     });
 })();

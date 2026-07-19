@@ -65,6 +65,8 @@ export function markNodesDone(
   let modified = 0;
 
   function process(node: KmNode): boolean {
+    let nodeModified = false;
+
     if (nodeIds.includes(node.data.id)) {
       const resources = node.data.resource || [];
       // 移除待拆解，添加已完成
@@ -74,18 +76,17 @@ export function markNodesDone(
       // 去重
       node.data.resource = [...new Set(newResources)];
       modified++;
-      return true;
+      nodeModified = true;
     }
 
-    let childModified = false;
     if (node.children) {
       for (const child of node.children) {
         if (process(child)) {
-          childModified = true;
+          nodeModified = true;
         }
       }
     }
-    return childModified;
+    return nodeModified;
   }
 
   process(doc.root);

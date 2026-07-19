@@ -1,6 +1,26 @@
 /**
  * initial kityminder-editor
  */
+window.infiniteMapWebviewSessionId =
+	window.crypto && typeof window.crypto.randomUUID === "function"
+		? window.crypto.randomUUID()
+		: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+const draftSuppressions = new Set();
+window.mindmapSuppressDraft = false;
+window.infiniteMapAcquireDraftSuppression = function (token) {
+	draftSuppressions.add(token);
+	window.mindmapSuppressDraft = true;
+};
+window.infiniteMapReleaseDraftSuppression = function (token) {
+	draftSuppressions.delete(token);
+	window.mindmapSuppressDraft = draftSuppressions.size > 0;
+};
+if (window.infiniteMapRefreshDraftSuppression) {
+	window.infiniteMapAcquireDraftSuppression(window.infiniteMapRefreshDraftSuppression);
+	window.infiniteMapRefreshDraftSuppression = undefined;
+}
+
 angular
 	.module("kityminderDemo", ["kityminderEditor"])
 	.config(function (configProvider) {
@@ -11,8 +31,20 @@ angular
 		if (state.upload_url) {
 			configProvider.set("imageUpload", state.upload_url);
 		}
-	})
-	.controller("MainController", function ($scope) {
+		})
+		.controller("MainController", function ($scope) {
+			let importSequence = 0;
+
+			function suppressDraft(token) {
+				window.infiniteMapAcquireDraftSuppression(token);
+			}
+
+			function releaseDraft(token) {
+				window.setTimeout(() => {
+					window.infiniteMapReleaseDraftSuppression(token);
+				}, 250);
+		}
+
 		function listenContentChange() {
 			if (listenContentChange.listened) return;
 			window.minder.on("contentchange", (e) => {
@@ -41,54 +73,64 @@ angular
 			 * receive message event from extension
 			 */
 			window.addEventListener("message", function (event) {
-				window.message = event.data;
-				const { command, extName } = window.message;
-				window.fileExtName = extName;
+				const message = event.data;
+				window.message = message;
+				const { command, extName } = message;
+				if (extName) {
+					window.fileExtName = extName;
+				}
 
-					switch (command) {
-						case "import": {
-							window.mindmapSuppressDraft = true;
-							window.clearTimeout(window.mindmapSuppressDraftTimer);
-							let importTask = Promise.resolve();
-						try {
-							importTask = importTask.then(() => {
-								const importData = window.message.importData;
-								if (extName === ".svg") {
-									return new Promise((resolve) => {
-										// 可能出现格式不正确内部抛异常
-										window.minder
-											.importData("svg", importData)
-											.then(resolve, resolve);
-									});
-								} else {
-									// 可能出现格式不正确内部抛异常
-									window.minder.importJson(
-										JSON.parse(importData || "{}")
-									);
-								}
-							});
-						} catch (ex) {
-							console.error(ex);
-						}
-							const finishImport = () => {
-								window.mindmapSuppressDraftTimer = window.setTimeout(() => {
-									window.mindmapSuppressDraft = false;
-								}, 250);
-								listenContentChange();
-							};
-							importTask.then(finishImport, finishImport);
-							break;
+				switch (command) {
+					case "import": {
+						const suppressionToken = message.importRequestId || `import-${++importSequence}`;
+						suppressDraft(suppressionToken);
+						const importTask = Promise.resolve().then(() => {
+							const importData = message.importData;
+							if (extName === ".svg") {
+								return window.minder.importData("svg", importData);
+							}
+							return window.minder.importJson(JSON.parse(importData || "{}"));
+						});
+						const finishImport = (ok, error) => {
+							releaseDraft(suppressionToken);
+							listenContentChange();
+							if (message.importRequestId) {
+								window.vscode.postMessage({
+									command: "importResult",
+									importRequestId: message.importRequestId,
+									ok,
+									error: error ? String(error.message || error) : undefined,
+								});
+							}
+						};
+						importTask.then(
+							() => finishImport(true),
+							(error) => {
+								console.error(error);
+								finishImport(false, error);
+							}
+						);
+						break;
 					}
 					case "requestSave":
-						// VS Code 原生保存通道：File→Save 时 extension 请求最新数据
+						// VS Code native save channel: echo the request ID to reject stale responses.
 						window.vscode.postMessage({
 							command: "save",
+							requestId: message.requestId,
 							exportData: JSON.stringify(window.minder.exportJson(), null, 4),
 						});
 						break;
 					case "ping":
-						// 心跳响应：extension 定时发送 ping，webview 回 pong
-						window.vscode.postMessage({ command: "pong" });
+						window.vscode.postMessage({ command: "pong", pingId: message.pingId });
+						break;
+					case "reconnect":
+						window.vscode.postMessage({
+							command: "reconnected",
+							reconnectId: message.reconnectId,
+							exportData: JSON.stringify(window.minder.exportJson(), null, 4),
+							webviewSessionId: window.infiniteMapWebviewSessionId,
+							timestamp: new Date().toISOString(),
+						});
 						break;
 				}
 			});
@@ -110,9 +152,13 @@ angular
 				} catch (e) {}
 			});
 
-			window.vscode.postMessage({
-				command: "loaded",
-			});
+				// Keep the original `loaded` handshake on the wire. Older extension
+				// hosts can remain alive when a same-version VSIX is overwritten.
+				window.vscode.postMessage({
+					command: "loaded",
+					webviewSessionId: window.infiniteMapWebviewSessionId,
+					timestamp: new Date().toISOString(),
+				});
 		};
 	});
 

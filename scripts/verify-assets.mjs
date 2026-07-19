@@ -42,21 +42,38 @@ function findPartFiles(directory) {
 findPartFiles(join(root, 'webui'));
 
 const mainScript = readFileSync(join(root, 'webui/main.js'), 'utf8');
-for (const command of ['requestSave', 'ping', 'pong', 'loaded', 'draft']) {
+for (const command of ['requestSave', 'ping', 'pong', 'loaded', 'reconnect', 'draft', 'importResult']) {
   if (!mainScript.includes(command)) {
     errors.push(`webui/main.js is missing the ${command} message handler`);
   }
+}
+if (!/command\s*:\s*['"]loaded['"]/.test(mainScript)) {
+  errors.push('webui/main.js must send the legacy-compatible loaded handshake');
 }
 if (!mainScript.includes('mindmapSuppressDraft')) {
   errors.push('webui/main.js must suppress draft events during programmatic imports');
 }
 
 const refreshScript = readFileSync(join(root, 'webui/refreshBtn.js'), 'utf8');
-if (!refreshScript.includes('mindmapSuppressDraft = true')) {
-  errors.push('webui/refreshBtn.js must suppress the synthetic draft caused by refresh');
+for (const refreshContractToken of [
+  'refresh-from-disk-btn',
+  'aria-label=',
+  "command: 'refresh', requestId",
+  'refreshResult',
+  'mindmap-refresh-icon',
+  'MutationObserver',
+]) {
+  if (!refreshScript.includes(refreshContractToken)) {
+    errors.push(`webui/refreshBtn.js is missing ${refreshContractToken}`);
+  }
 }
 
 const editorSource = readFileSync(join(root, 'src/mindEditor.ts'), 'utf8');
+for (const handshake of ["case 'loaded':", "case 'ready':", "case 'importResult':", "case 'refresh':"]) {
+  if (!editorSource.includes(handshake)) {
+    errors.push(`src/mindEditor.ts is missing the ${handshake} compatibility branch`);
+  }
+}
 const draftStart = editorSource.indexOf("case 'draft':");
 const draftEnd = editorSource.indexOf("case 'clicklink':", draftStart);
 const draftHandler = editorSource.slice(draftStart, draftEnd);
@@ -74,6 +91,16 @@ for (const saveContractToken of [
 ]) {
   if (!editorSource.includes(saveContractToken)) {
     errors.push(`src/mindEditor.ts is missing ${saveContractToken}`);
+  }
+}
+for (const refreshContractToken of [
+  'refreshFromDisk',
+  'pendingImports',
+  'reloadInvocationCounts',
+  'Save cancelled because the document is being reloaded from disk',
+]) {
+  if (!editorSource.includes(refreshContractToken)) {
+    errors.push(`src/mindEditor.ts is missing ${refreshContractToken}`);
   }
 }
 if (editorSource.includes("throw new Error('Method not implemented.')")) {

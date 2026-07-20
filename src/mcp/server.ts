@@ -22,6 +22,9 @@ import { handleKmListTodos } from './tools/kmListTodos';
 import { handleKmGetNode } from './tools/kmGetNode';
 import { handleKmMarkDone } from './tools/kmMarkDone';
 import { handleKmValidate } from './tools/kmValidate';
+import { handleKmListCollaborationTasks } from './tools/kmListCollaborationTasks';
+import { handleKmGetCollaborationContext } from './tools/kmGetCollaborationContext';
+import { handleKmExpandCollaboration } from './tools/kmExpandCollaboration';
 
 /** 工具清单 */
 const tools: Tool[] = [
@@ -90,6 +93,61 @@ const tools: Tool[] = [
       required: ['filePath'],
     },
   },
+  {
+    name: 'km_list_collaboration_tasks',
+    description: '从最新 KM 文件中列出所有标记为"待协同"的节点，并返回文件版本和根路径上下文',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'KM 文件的绝对路径' },
+      },
+      required: ['filePath'],
+    },
+  },
+  {
+    name: 'km_get_collaboration_context',
+    description: '读取待协同节点的根到目标链路、完整子树和必要同级上下文，并返回最新文件版本',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'KM 文件的绝对路径' },
+        nodeId: { type: 'string', description: '目标待协同节点 ID' },
+        siblingLimit: {
+          type: 'number',
+          minimum: 0,
+          maximum: 50,
+          description: '最多返回的同级上下文节点数，默认 8',
+        },
+      },
+      required: ['filePath', 'nodeId'],
+    },
+  },
+  {
+    name: 'km_expand_collaboration',
+    description: '在待协同节点下扩散生成无标签子节点，并将父节点标记为已完成；支持版本校验和 dry-run',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'KM 文件的绝对路径' },
+        nodeId: { type: 'string', description: '目标待协同节点 ID' },
+        expectedRevision: {
+          type: 'string',
+          description: '由最新协同清单或上下文返回的文件版本',
+        },
+        childTexts: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          description: '要扩散生成的直接子节点文本数组，生成节点不带标签',
+        },
+        dryRun: {
+          type: 'boolean',
+          description: '是否为试运行模式（不实际写入文件），默认 false',
+        },
+      },
+      required: ['filePath', 'nodeId', 'expectedRevision', 'childTexts'],
+    },
+  },
 ];
 
 const toolHandlers: Record<string, (args: any) => any> = {
@@ -98,6 +156,9 @@ const toolHandlers: Record<string, (args: any) => any> = {
   km_get_node: handleKmGetNode,
   km_mark_done: handleKmMarkDone,
   km_validate: handleKmValidate,
+  km_list_collaboration_tasks: handleKmListCollaborationTasks,
+  km_get_collaboration_context: handleKmGetCollaborationContext,
+  km_expand_collaboration: handleKmExpandCollaboration,
 };
 
 /**
@@ -113,6 +174,8 @@ export async function startServer() {
       capabilities: {
         tools: {},
       },
+      instructions:
+        'All .km reads, task discovery, node inspection, validation, and writes must use these MCP tools. Never read or write .km files through shell or filesystem APIs. Always pass an absolute filePath and reread the current file for every new request. When the user only provides a .km path, discover pending breakdown and collaboration tasks first. Before km_mark_done or km_expand_collaboration, validate the file and run dryRun. For collaboration, read the latest context, pass its fileRevision as expectedRevision, generate unlabeled child nodes, then validate and list tasks again.',
     }
   );
 

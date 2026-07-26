@@ -1,0 +1,46 @@
+<div class="node-card-panel" ng-show="visible">
+    <div class="node-card-title" title="{{ card.text }}">{{ card.text }}</div>
+    <div class="node-card-row">
+        <span class="node-card-label">创建时间</span>
+        <span class="node-card-value">{{ card.created }}</span>
+    </div>
+    <div class="node-card-row">
+        <span class="node-card-label">节点 ID</span>
+        <span class="node-card-value">{{ card.nodeId }}</span>
+    </div>
+    <div class="node-card-row">
+        <span class="node-card-label">层级</span>
+        <span class="node-card-value">{{ card.level }}</span>
+    </div>
+    <div class="node-card-row">
+        <span class="node-card-label">子节点数</span>
+        <span class="node-card-value">{{ card.childCount }}</span>
+    </div>
+    <div class="node-card-row" ng-if="card.resources.length">
+        <span class="node-card-label">标签</span>
+        <span class="node-card-value">
+            <span class="node-card-resource" ng-repeat="resource in card.resources"
+                  ng-style="{'background': resourceColor(resource)}">{{ resource }}</span>
+        </span>
+    </div>
+    <div class="node-card-exec" ng-if="card.exec">
+        <div class="node-card-row">
+            <span class="node-card-label">执行状态</span>
+            <span class="node-card-value">
+                <span class="node-card-exec-state">{{ card.exec.stateText }}</span>
+            </span>
+        </div>
+        <div class="node-card-row">
+            <span class="node-card-label">认领人</span>
+            <span class="node-card-value">{{ card.exec.workerId }}</span>
+        </div>
+        <div class="node-card-row" ng-if="card.exec.leaseUntil">
+            <span class="node-card-label">租约到期</span>
+            <span class="node-card-value">{{ card.exec.leaseUntil }}</span>
+        </div>
+        <div class="node-card-row" ng-if="card.exec.failReason">
+            <span class="node-card-label">失败原因</span>
+            <span class="node-card-value">{{ card.exec.failReason }}</span>
+        </div>
+    </div>
+</div>

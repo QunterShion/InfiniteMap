@@ -112,6 +112,7 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 	private documentStates = new Map<string, DocumentState>();
 	private documentOwners = new Map<string, vscode.CustomDocument>();
 	private documentWatchers = new Map<string, vscode.FileSystemWatcher>();
+	private execStateWatchers = new Map<string, vscode.FileSystemWatcher>();
 	private externalChangeTimers = new Map<string, NodeJS.Timeout>();
 	private externalChangeRevisions = new Map<string, number>();
 	private reloadOperations = new Map<string, Promise<void>>();
@@ -770,6 +771,7 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 								state.lastDiskContent = state.content;
 							}
 							await this.postImport(document, state.content);
+							this.broadcastExecState(document);
 							return;
 						case 'refresh': {
 							const requestId = typeof message.requestId === 'string' ? message.requestId : undefined;
@@ -1334,6 +1336,45 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 		watcher.onDidCreate(() => this.scheduleExternalChange(document, false));
 		watcher.onDidDelete(() => this.scheduleExternalChange(document, true));
 		this.documentWatchers.set(docKey, watcher);
+
+		// 并行执行旁车文件（<km>.exec.json）监听：变化时把节点执行状态推送给 Webview 节点卡片
+		const execWatcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(
+				path.dirname(document.uri.fsPath),
+				path.basename(document.uri.fsPath) + '.exec.json'
+			)
+		);
+		execWatcher.onDidChange(() => this.broadcastExecState(document));
+		execWatcher.onDidCreate(() => this.broadcastExecState(document));
+		execWatcher.onDidDelete(() => this.broadcastExecState(document));
+		this.execStateWatchers.set(docKey, execWatcher);
+	}
+
+	/** 读取旁车执行状态并推送给当前 Webview；文件缺失或损坏时推送空状态 */
+	private broadcastExecState(document: vscode.CustomDocument): void {
+		const docKey = document.uri.toString();
+		const panel = this.activePanels.get(docKey);
+		if (!panel) {
+			return;
+		}
+
+		let tasks: Record<string, unknown> = {};
+		try {
+			const execPath = document.uri.fsPath + '.exec.json';
+			if (fs.existsSync(execPath)) {
+				const state = JSON.parse(fs.readFileSync(execPath, 'utf-8'));
+				if (state && typeof state.tasks === 'object' && state.tasks) {
+					tasks = state.tasks;
+				}
+			}
+		} catch {
+			// 旁车文件写入中途或损坏时保持空状态，等待下一次变化事件
+		}
+
+		void panel.webview.postMessage({ command: 'execState', tasks }).then(
+			() => undefined,
+			() => undefined
+		);
 	}
 
 	private scheduleExternalChange(document: vscode.CustomDocument, deleted: boolean): void {
@@ -1419,6 +1460,8 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 		}
 		this.documentWatchers.get(docKey)?.dispose();
 		this.documentWatchers.delete(docKey);
+		this.execStateWatchers.get(docKey)?.dispose();
+		this.execStateWatchers.delete(docKey);
 		this.externalChangeRevisions.delete(docKey);
 	}
 

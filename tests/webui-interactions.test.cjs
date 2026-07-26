@@ -148,7 +148,7 @@ test('resource editor always exposes built-in completion tags without mutating s
     directive.controller(scope);
     assert.deepEqual(
         Array.from(scope.used, (resource) => resource.name),
-        ['existing', '已完成', '待拆解'],
+        ['existing', '已完成', '待拆解', '待协同'],
     );
     assert.equal(scope.used[0].selected, true);
 

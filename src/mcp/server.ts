@@ -25,6 +25,10 @@ import { handleKmValidate } from './tools/kmValidate';
 import { handleKmListCollaborationTasks } from './tools/kmListCollaborationTasks';
 import { handleKmGetCollaborationContext } from './tools/kmGetCollaborationContext';
 import { handleKmExpandCollaboration } from './tools/kmExpandCollaboration';
+import { kmClaimTodosTool, handleKmClaimTodos } from './tools/kmClaimTodos';
+import { kmRenewClaimTool, handleKmRenewClaim } from './tools/kmRenewClaim';
+import { kmCompleteClaimTool, handleKmCompleteClaim } from './tools/kmCompleteClaim';
+import { kmReleaseClaimTool, handleKmReleaseClaim } from './tools/kmReleaseClaim';
 
 /** 工具清单 */
 const tools: Tool[] = [
@@ -41,7 +45,7 @@ const tools: Tool[] = [
   },
   {
     name: 'km_list_todos',
-    description: '列出 KM 文件中所有标记为"待拆解"的节点，返回节点路径、文本、层级和父级上下文',
+    description: '列出 KM 文件中所有标记为"待拆解"的节点，返回节点路径、文本、层级、父级上下文和文件版本 kmRevision',
     inputSchema: {
       type: 'object',
       properties: {
@@ -64,7 +68,7 @@ const tools: Tool[] = [
   },
   {
     name: 'km_mark_done',
-    description: '批量将 KM 文件中指定节点的标签从"待拆解"改为"已完成"，支持 dry-run 试运行模式',
+    description: '批量将 KM 文件中指定节点的标签从"待拆解"改为"已完成"，支持 dry-run 试运行模式；可传入 expectedRevision 检测并发修改冲突',
     inputSchema: {
       type: 'object',
       properties: {
@@ -77,6 +81,10 @@ const tools: Tool[] = [
         dryRun: {
           type: 'boolean',
           description: '是否为试运行模式（不实际写入文件），默认 false',
+        },
+        expectedRevision: {
+          type: 'string',
+          description: '可选，由 km_list_todos 返回的文件版本 kmRevision；传入时若文件已被并发修改则拒绝写入',
         },
       },
       required: ['filePath', 'nodeIds'],
@@ -148,6 +156,10 @@ const tools: Tool[] = [
       required: ['filePath', 'nodeId', 'expectedRevision', 'childTexts'],
     },
   },
+  kmClaimTodosTool as Tool,
+  kmRenewClaimTool as Tool,
+  kmCompleteClaimTool as Tool,
+  kmReleaseClaimTool as Tool,
 ];
 
 const toolHandlers: Record<string, (args: any) => any> = {
@@ -157,6 +169,10 @@ const toolHandlers: Record<string, (args: any) => any> = {
   km_mark_done: handleKmMarkDone,
   km_validate: handleKmValidate,
   km_list_collaboration_tasks: handleKmListCollaborationTasks,
+  km_claim_todos: handleKmClaimTodos,
+  km_renew_claim: handleKmRenewClaim,
+  km_complete_claim: handleKmCompleteClaim,
+  km_release_claim: handleKmReleaseClaim,
   km_get_collaboration_context: handleKmGetCollaborationContext,
   km_expand_collaboration: handleKmExpandCollaboration,
 };
@@ -175,7 +191,7 @@ export async function startServer() {
         tools: {},
       },
       instructions:
-        'All .km reads, task discovery, node inspection, validation, and writes must use these MCP tools. Never read or write .km files through shell or filesystem APIs. Always pass an absolute filePath and reread the current file for every new request. When the user only provides a .km path, discover pending breakdown and collaboration tasks first. Before km_mark_done or km_expand_collaboration, validate the file and run dryRun. For collaboration, read the latest context, pass its fileRevision as expectedRevision, generate unlabeled child nodes, then validate and list tasks again.',
+        'All .km reads, task discovery, node inspection, validation, and writes must use these MCP tools. Never read or write .km files through shell or filesystem APIs. Always pass an absolute filePath and reread the current file for every new request. When the user only provides a .km path, discover pending breakdown and collaboration tasks first. Before km_mark_done or km_expand_collaboration, validate the file and run dryRun. When writing back with km_mark_done, pass the kmRevision returned by km_list_todos as expectedRevision so concurrent modifications are rejected instead of silently overwritten. For collaboration, read the latest context, pass its fileRevision as expectedRevision, generate unlabeled child nodes, then validate and list tasks again. For parallel execution by multiple independent workers, use the lease workflow instead of km_mark_done: km_claim_todos to claim leaf todos (returns claimId), km_renew_claim to extend the lease during long work, km_complete_claim to verify-and-complete atomically, and km_release_claim to give tasks back (optionally with failReason). Nodes claimed under an active lease are protected from km_mark_done.',
     }
   );
 

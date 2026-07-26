@@ -8,7 +8,9 @@
         <button class="btn btn-default" ng-click="addResource(newResourceName)" ng-disabled="!enabled">{{ 'add' | lang: 'ui/resource'; }}</button>
     </span>
 	</div>
-    <div class="resource-dropdown clearfix" id="resource-dropdown">
+    <div class="resource-dropdown clearfix" id="resource-dropdown"
+         ng-mouseenter="resourceListOpen = true"
+         ng-mouseleave="resourceListOpen = false">
         <ul class="km-resource"
             ng-init="resourceListOpen = false"
             ng-class="{'open': resourceListOpen}">
@@ -19,10 +21,7 @@
                 </label>
             </li>
         </ul>
-        <div class="resource-caret"
-             click-anywhere-but-here="resourceListOpen = false"
-             is-active="resourceListOpen"
-             ng-click="resourceListOpen = !resourceListOpen">
+        <div class="resource-caret">
             <span class="caret"></span>
         </div>
     </div>

@@ -123,6 +123,11 @@ angular
 					case "ping":
 						window.vscode.postMessage({ command: "pong", pingId: message.pingId });
 						break;
+					case "execState":
+						// 并行执行旁车状态：供右下角节点卡片展示认领/租约信息
+						window.kmExecState = message.tasks || {};
+						document.dispatchEvent(new CustomEvent("km-exec-state"));
+						break;
 					case "reconnect":
 						window.vscode.postMessage({
 							command: "reconnected",

@@ -15,6 +15,14 @@ import {
   KM_DONE_LABEL,
   KM_TODO_LABEL,
 } from './kmFileReader';
+import {
+  atomicWriteJsonFile,
+  withKmFileLock,
+  readExecState,
+  writeExecState,
+  isLeaseActive,
+  getExecStatePath,
+} from './kmExecState';
 
 /** 写回结果 */
 export interface WriteResult {
@@ -22,6 +30,8 @@ export interface WriteResult {
   filePath: string;
   verified: boolean;
   backupPath?: string;
+  revisionBefore?: string;
+  revisionAfter?: string;
 }
 
 /** 协同扩散生成的子节点摘要 */
@@ -43,35 +53,45 @@ export interface ExpandCollaborationResult {
 }
 
 /**
- * 安全地写入 KM 文件（带备份）
+ * 安全地写入 KM 文件：临时文件写入 + JSON 校验 + 原子 rename 替换，
+ * 避免并发读取方读到半文件
  */
 function safeWriteFile(filePath: string, content: string): void {
-  const backupPath = filePath + '.backup';
+  atomicWriteJsonFile(filePath, content);
+}
 
-  // 1. 备份原文件
-  if (fs.existsSync(filePath)) {
-    fs.copyFileSync(filePath, backupPath);
+/**
+ * 若旁车执行状态存在，把本次完成的节点同步为 done，并刷新旁车中的文件版本
+ */
+function syncExecStateAfterWrite(
+  filePath: string,
+  completedNodeIds: string[],
+  completedBy: 'claim' | 'legacy'
+): void {
+  if (!fs.existsSync(getExecStatePath(filePath))) {
+    return;
+  }
+  const execState = readExecState(filePath);
+  const nowIso = new Date().toISOString();
+  let touched = false;
+
+  for (const nodeId of completedNodeIds) {
+    const entry = execState.tasks[nodeId];
+    if (entry && entry.state !== 'done') {
+      entry.state = 'done';
+      entry.doneAt = nowIso;
+      entry.completedBy = completedBy;
+      touched = true;
+    }
   }
 
-  try {
-    // 2. 写入新内容
-    fs.writeFileSync(filePath, content, 'utf-8');
-
-    // 3. 校验写入后的 JSON 合法性
-    const verifyRaw = fs.readFileSync(filePath, 'utf-8');
-    JSON.parse(verifyRaw);
-
-    // 4. 校验通过，删除备份
-    if (fs.existsSync(backupPath)) {
-      fs.unlinkSync(backupPath);
-    }
-  } catch (e) {
-    // 写入失败，从备份恢复
-    if (fs.existsSync(backupPath)) {
-      fs.copyFileSync(backupPath, filePath);
-      fs.unlinkSync(backupPath);
-    }
-    throw new Error(`文件写入失败: ${e instanceof Error ? e.message : String(e)}`);
+  const latestRevision = getKmFileRevision(filePath);
+  if (execState.kmRevision !== latestRevision) {
+    execState.kmRevision = latestRevision;
+    touched = true;
+  }
+  if (touched) {
+    writeExecState(filePath, execState);
   }
 }
 
@@ -125,14 +145,52 @@ function completeNodeByLabel(node: KmNode, labelToRemove: string): void {
  * @param filePath KM 文件路径
  * @param nodeIds 要标记的节点 ID 数组
  * @param dryRun 是否为试运行模式（不实际写入）
+ * @param expectedRevision 可选，由 km_list_todos 返回的文件版本；传入时不匹配即拒绝写入
  */
 export function markNodesDone(
   filePath: string,
   nodeIds: string[],
-  dryRun: boolean = false
+  dryRun: boolean = false,
+  expectedRevision?: string
 ): WriteResult {
   const resolved = path.resolve(filePath);
-  const before = fs.statSync(resolved);
+  return withKmFileLock(resolved, () =>
+    markNodesDoneLocked(resolved, nodeIds, dryRun, expectedRevision)
+  );
+}
+
+/** markNodesDone 的锁内实现：所有校验和写入都基于锁内重新读取的文件 */
+function markNodesDoneLocked(
+  resolved: string,
+  nodeIds: string[],
+  dryRun: boolean,
+  expectedRevision?: string
+): WriteResult {
+  const revisionBefore = getKmFileRevision(resolved);
+
+  if (expectedRevision !== undefined) {
+    const expected = expectedRevision.trim();
+    if (!expected) {
+      throw new Error('expectedRevision 不能为空字符串，应传入 km_list_todos 返回的 kmRevision');
+    }
+    if (revisionBefore !== expected) {
+      throw new Error(
+        `KM 文件版本已变化，请重新调用 km_list_todos 获取最新清单后再回写。expected=${expected}, actual=${revisionBefore}`
+      );
+    }
+  }
+
+  // 活跃租约保护：目标节点被其他执行者认领且租约未过期时，禁止绕过 claim 直接回写
+  const execState = readExecState(resolved);
+  for (const nodeId of nodeIds) {
+    const entry = execState.tasks[nodeId];
+    if (isLeaseActive(entry)) {
+      throw new Error(
+        `节点已被 ${entry!.workerId} 认领且租约未过期，请由认领者通过 km_complete_claim 完成，或先 km_release_claim 释放: ${nodeId}`
+      );
+    }
+  }
+
   const doc = readKmFile(resolved);
   let modified = 0;
 
@@ -168,16 +226,18 @@ export function markNodesDone(
       modified: 0,
       filePath: resolved,
       verified: true,
+      revisionBefore,
+      revisionAfter: revisionBefore,
     };
   }
 
   if (!dryRun) {
     const content = JSON.stringify(doc, null, 4);
     safeWriteFile(resolved, content);
+    syncExecStateAfterWrite(resolved, nodeIds, 'legacy');
   }
 
   // 校验
-  const after = fs.statSync(resolved);
   let verified = false;
   try {
     const verifyDoc = readKmFile(resolved);
@@ -206,6 +266,8 @@ export function markNodesDone(
     modified,
     filePath: resolved,
     verified,
+    revisionBefore,
+    revisionAfter: dryRun ? revisionBefore : getKmFileRevision(resolved),
   };
 }
 
@@ -239,6 +301,8 @@ export function expandCollaborationTask(
     throw new Error(`childTexts[${emptyIndex}] 不能为空`);
   }
 
+  // 版本校验与写入在同一把文件锁内完成，消除“校验通过后被并发写入”的竞态窗口
+  return withKmFileLock(resolved, () => {
   const revisionBefore = getKmFileRevision(resolved);
   if (revisionBefore !== expected) {
     throw new Error(
@@ -293,6 +357,7 @@ export function expandCollaborationTask(
   if (!dryRun) {
     const content = JSON.stringify(doc, null, 4);
     safeWriteFile(resolved, content);
+    syncExecStateAfterWrite(resolved, [], 'legacy');
     revisionAfter = getKmFileRevision(resolved);
 
     const verifyDoc = readKmFile(resolved);
@@ -326,6 +391,7 @@ export function expandCollaborationTask(
     parentCompleted: true,
     verified,
   };
+  });
 }
 
 /**

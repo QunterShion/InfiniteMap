@@ -9,7 +9,7 @@ angular.module('kityminderEditor')
             replace: true,
             controller: function ($scope) {
                 var minder = $scope.minder;
-                var builtInResources = ['已完成', '待拆解'];
+                var builtInResources = ['已完成', '待拆解', '待协同'];
 
 	            var isInteracting = false;
 

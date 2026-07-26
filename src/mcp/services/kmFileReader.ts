@@ -42,6 +42,14 @@ export interface TodoNode {
   grandParentText?: string;
 }
 
+/** 待拆解任务清单（含文件版本） */
+export interface TodoList {
+  filePath: string;
+  kmRevision: string;
+  todoCount: number;
+  todos: TodoNode[];
+}
+
 /** 待协同节点摘要 */
 export interface CollaborationTaskNode extends TodoNode {
   labels: string[];
@@ -209,6 +217,21 @@ export function listTodos(filePath: string): TodoNode[] {
 
   traverse(doc.root, 0, [], undefined, undefined);
   return todos;
+}
+
+/**
+ * 列出所有待拆解节点，并返回文件内容版本供回写时乐观校验
+ */
+export function listTodosWithRevision(filePath: string): TodoList {
+  const resolved = path.resolve(filePath);
+  const todos = listTodos(resolved);
+
+  return {
+    filePath: resolved,
+    kmRevision: getKmFileRevision(resolved),
+    todoCount: todos.length,
+    todos,
+  };
 }
 
 /**

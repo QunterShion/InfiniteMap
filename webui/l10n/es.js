@@ -189,6 +189,15 @@ define(function(require, exports, module) {
                     'title': 'Exportar Nodo',
                     'ok': 'OK',
                     'cancel': 'Cancelar'
+                },
+                'nodeSplit': {
+                    'title': 'Dividir nodo',
+                    'root-title': 'Copiar mapa mental',
+                    'description': '¿Crear un mapa mental con este nodo y sus descendientes y después quitarlos de este mapa?',
+                    'root-description': 'El nodo raíz no se puede quitar. ¿Crear una copia y mantener este mapa sin cambios?',
+                    'confirm': 'Dividir nodo',
+                    'copy': 'Crear copia',
+                    'cancel': 'Cancelar'
                 }
             }
         },
@@ -207,6 +216,13 @@ define(function(require, exports, module) {
                 'topic': 'Tema',
                 'importnode': 'Importar Nodo',
                 'exportnode': 'Exportar Nodo'
+            },
+            'nodeSplit': {
+                'label': 'Dividir nodo',
+                'changed': 'Se creó el mapa nuevo, pero el subárbol de origen cambió y se conservó aquí.',
+                'missingid': 'Este nodo no se puede dividir porque no tiene un ID estable.',
+                'failed': 'No se pudo dividir el nodo. El origen se mantuvo sin cambios.',
+                'timeout': 'La solicitud caducó. El origen se mantuvo sin cambios.'
             },
             'input': {
                 'edit': 'Editar'

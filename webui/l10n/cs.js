@@ -191,6 +191,15 @@ define(function (require, exports, module) {
 					ok: "Tak určitě",
 					cancel: "zrušení",
 				},
+				nodeSplit: {
+					title: "Rozdělit uzel",
+					"root-title": "Kopírovat myšlenkovou mapu",
+					description: "Vytvořit novou mapu z tohoto uzlu a jeho potomků a potom je odebrat z této mapy?",
+					"root-description": "Kořenový uzel nelze odebrat. Vytvořit kopii a tuto mapu ponechat beze změny?",
+					confirm: "Rozdělit uzel",
+					copy: "Vytvořit kopii",
+					cancel: "Zrušit",
+				},
 			},
 		},
 		runtime: {
@@ -208,6 +217,13 @@ define(function (require, exports, module) {
 				topic: "oborové téma",
 				importnode: "Importní uzel",
 				exportnode: "exportní uzel",
+			},
+			nodeSplit: {
+				label: "Rozdělit uzel",
+				changed: "Nová mapa byla vytvořena, ale zdrojový podstrom se změnil a zůstal zachován.",
+				missingid: "Tento uzel nelze rozdělit bez stabilního ID.",
+				failed: "Uzel se nepodařilo rozdělit. Zdroj zůstal beze změny.",
+				timeout: "Požadavek vypršel. Zdroj zůstal beze změny.",
 			},
 			input: {
 				edit: "Upravit",

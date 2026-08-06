@@ -191,6 +191,15 @@ define(function (require, exports, module) {
 					ok: "もちろん",
 					cancel: "キャンセル",
 				},
+				nodeSplit: {
+					title: "ノードを分割",
+					"root-title": "マインドマップをコピー",
+					description: "このノードとすべての子孫から新しいマップを作成し、現在のマップから削除しますか？",
+					"root-description": "ルートノードは削除できません。コピーを作成し、現在のマップは変更せずに残しますか？",
+					confirm: "ノードを分割",
+					copy: "コピーを作成",
+					cancel: "キャンセル",
+				},
 			},
 		},
 		runtime: {
@@ -208,6 +217,13 @@ define(function (require, exports, module) {
 				topic: "ブランチトピック",
 				importnode: "インポートノード",
 				exportnode: "エクスポートノード",
+			},
+			nodeSplit: {
+				label: "ノードを分割",
+				changed: "新しいマップは作成されましたが、元のサブツリーが変更されたため、ここに保持されました。",
+				missingid: "安定した ID がないため、このノードは分割できません。",
+				failed: "ノードを分割できませんでした。元のノードは変更されていません。",
+				timeout: "分割リクエストがタイムアウトしました。元のノードは変更されていません。",
 			},
 			input: {
 				edit: "編集",

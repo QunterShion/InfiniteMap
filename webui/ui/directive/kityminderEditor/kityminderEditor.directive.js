@@ -1,5 +1,5 @@
 angular.module('kityminderEditor')
-	.directive('kityminderEditor', ['config', 'minder.service', 'revokeDialog', function(config, minderService, revokeDialog) {
+	.directive('kityminderEditor', ['config', 'minder.service', 'revokeDialog', 'nodeSplitDialog', function(config, minderService, revokeDialog, nodeSplitDialog) {
 		return {
 			restrict: 'EA',
 			templateUrl: 'ui/directive/kityminderEditor/kityminderEditor.html',

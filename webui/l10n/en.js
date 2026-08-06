@@ -190,6 +190,15 @@ define(function(require, exports, module) {
                     'title': 'Export Node',
                     'ok': 'OK',
                     'cancel': 'Cancel'
+                },
+                'nodeSplit': {
+                    'title': 'Split node',
+                    'root-title': 'Copy mind map',
+                    'description': 'Create a new mind map from this node and its descendants, then remove them from this map?',
+                    'root-description': 'The root cannot be removed. Create a new copy and keep this map unchanged?',
+                    'confirm': 'Split node',
+                    'copy': 'Create copy',
+                    'cancel': 'Cancel'
                 }
             }
         },
@@ -208,6 +217,13 @@ define(function(require, exports, module) {
                 'topic': 'Topic',
                 'importnode': 'Import Node',
                 'exportnode': 'Export Node'
+            },
+            'nodeSplit': {
+                'label': 'Split Node',
+                'changed': 'The new mind map was created, but the source subtree changed and was kept here.',
+                'missingid': 'This node cannot be split because it has no stable ID.',
+                'failed': 'The node could not be split. The source was kept unchanged.',
+                'timeout': 'The split request timed out. The source was kept unchanged.'
             },
             'input': {
                 'edit': 'Edit'

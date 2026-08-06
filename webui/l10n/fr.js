@@ -191,6 +191,15 @@ define(function(require, exports, module) {
                     'ok': 'OK',
                     'cancel': 'Annuler'
                 },
+                'nodeSplit': {
+                    'title': 'Scinder le nœud',
+                    'root-title': 'Copier la carte mentale',
+                    'description': 'Créer une carte avec ce nœud et ses descendants, puis les retirer de cette carte ?',
+                    'root-description': 'Le nœud racine ne peut pas être retiré. Créer une copie et conserver cette carte ?',
+                    'confirm': 'Scinder le nœud',
+                    'copy': 'Créer une copie',
+                    'cancel': 'Annuler'
+                },
 		'search': {
 			'result': 'Résultat',
 			'on': 'sur'
@@ -212,6 +221,13 @@ define(function(require, exports, module) {
                 'topic': 'Sujet',
                 'importnode': 'Importer un noeud',
                 'exportnode': 'Exporter un noeud'
+            },
+            'nodeSplit': {
+                'label': 'Scinder le nœud',
+                'changed': 'La nouvelle carte a été créée, mais le sous-arbre source a changé et a été conservé.',
+                'missingid': 'Ce nœud ne peut pas être scindé sans identifiant stable.',
+                'failed': 'Le nœud n’a pas pu être scindé. La source est restée inchangée.',
+                'timeout': 'La demande a expiré. La source est restée inchangée.'
             },
             'input': {
                 'edit': 'Edition'

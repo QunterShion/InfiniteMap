@@ -1,6 +1,30 @@
 /**
  * initial kityminder-editor
  */
+const DEFAULT_MAP_TEMPLATE = "right";
+
+function withDefaultKmTemplate(data, fileStem) {
+	if (!data || typeof data !== "object" || Array.isArray(data)) {
+		return data;
+	}
+
+	if (Object.keys(data).length === 0) {
+		data.root = { data: { text: fileStem || "" }, children: [] };
+	} else if (
+		data.root &&
+		data.root.data &&
+		typeof data.root.data.text === "string" &&
+		!data.root.data.text &&
+		fileStem
+	) {
+		data.root.data.text = fileStem;
+	}
+	if ((data.root || data.data) && !data.template) {
+		data.template = DEFAULT_MAP_TEMPLATE;
+	}
+	return data;
+}
+
 window.infiniteMapWebviewSessionId =
 	window.crypto && typeof window.crypto.randomUUID === "function"
 		? window.crypto.randomUUID()
@@ -68,6 +92,7 @@ angular
 		$scope.initEditor = function (editor, minder) {
 			window.editor = editor;
 			window.minder = minder;
+			minder.setTemplate(DEFAULT_MAP_TEMPLATE);
 
 			/**
 			 * receive message event from extension
@@ -89,7 +114,10 @@ angular
 							if (extName === ".svg") {
 								return window.minder.importData("svg", importData);
 							}
-							return window.minder.importJson(JSON.parse(importData || "{}"));
+							const parsedData = JSON.parse(importData || "{}");
+							return window.minder.importJson(
+								extName === ".km" ? withDefaultKmTemplate(parsedData, message.fileStem) : parsedData,
+							);
 						});
 						const finishImport = (ok, error) => {
 							releaseDraft(suppressionToken);

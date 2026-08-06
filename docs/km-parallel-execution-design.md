@@ -1,216 +1,232 @@
-# KM 并行任务拆解设计
+# KM 并行任务拆解设计（已落地）
 
-> 修订于 2026-07-26：基线从 5 个 MCP 工具更新为 8 个；协同链路（`km_list_collaboration_tasks` / `km_expand_collaboration`）已落地基于文件内容 SHA-256 的 `fileRevision` / `expectedRevision` 乐观校验，本文据此刷新评估结论与落地路径。
+> 修订历史：
 >
-> 落地状态（2026-07-26）：**Phase 0 已落地**——分批并行执行协议（协调者-执行者模式）已写入 `Workspace/harnessRules/brainstorm-executer/requirement-instruction-breakdown-rules.md` §4.1。**Phase 0.5 已落地**——`km_list_todos` 返回 `kmRevision`，`km_mark_done` 支持可选 `expectedRevision`。**Phase 1 已落地**——`src/mcp/services/kmExecState.ts` 实现旁车状态文件 `<km>.exec.json`、旁车锁 `<km>.lock`（原子创建 + 过期抢占）、临时文件 + rename 原子写入，以及 `km_claim_todos` / `km_renew_claim` / `km_complete_claim` / `km_release_claim` 四个租约工具（MCP 工具总数 8 → 12）；`km_mark_done` 与 `km_expand_collaboration` 均在同一把锁内执行，活跃租约节点受保护；含 10 个并发场景测试。**Phase 2 已按简化口径落地**——不做独立观测界面，扩展端监听 `<km>.exec.json` 并推送 Webview，右下角节点卡片展示选中节点的执行状态、认领人、租约到期时间与失败原因。
->
-> 与 §4 原设计的两处实现差异：1）`km_complete_claim` 不要求调用方传 `expectedNodeHashes`——认领时已把 `baseNodeHash` 写入旁车文件，完成时以旁车记录为准校验，更可靠且减小 API 面；2）`km_release_claim` 与 `km_fail_claim` 合并为一个工具，带 `failReason` 即记为 failed。
+> - 2026-07-18 初版：仅 5 个 MCP 工具基线上的方案评估，只产出设计不改造。
+> - 2026-07-26 第一次修订：基线更新为 8 个工具，协同链路已具备 `fileRevision` / `expectedRevision` 乐观校验；Phase 0（规则协调）与 Phase 0.5（revision 推广）落地。
+> - 2026-07-26 第二次修订（当前版本）：Phase 1（锁与租约）与简化版 Phase 2（节点卡片执行状态展示）落地，全文按**最终实现**回写；MCP 工具总数 8 → 12。
 
 ## 1. 结论
 
-针对“评估通过插件功能优化，还是执行规则流程调整实现并行互不干扰的拆解、执行跟踪与状态回写”，结论是**两条路线分层组合，规则先行、插件兜底**：
+针对“评估通过插件功能优化，还是执行规则流程调整实现并行互不干扰的拆解、执行跟踪与状态回写”，结论是**两条路线分层组合，规则先行、插件兜底**，目前已全部落地：
 
-- **执行规则流程调整（无需改代码，可立即落地）**：能完整覆盖“分批执行”“执行期间继续发现新待办”和“执行跟踪”。由一个协调者负责读取、分批分派和最终回写，多个执行者只处理自己领取的任务，不直接写 KM 文件。执行是并行的，但写入串行收敛到协调者，天然无冲突。
-- **插件功能优化（MCP 层，必要补充）**：要实现多个**独立写入者**之间真正的“互不干扰”，仅改规则不够。`km_list_todos` 不返回文件版本，`km_mark_done` 没有版本校验、任务认领、租约或跨进程锁，两个进程并发回写时后写者会整文件覆盖先写者。需要在 InfiniteMap MCP 层增加事务化任务状态管理。
-- **低成本捷径**：协同链路已经验证了 `fileRevision` 乐观校验（CAS）模式。把同一套 `getKmFileRevision` 机制推广到 `km_list_todos`（返回版本）和 `km_mark_done`（可选 `expectedRevision` 参数），即可用很小的改动把待拆解链路提升到“冲突可检测”水平，作为完整 claim/租约方案落地前的过渡。
+- **执行规则流程调整（Phase 0，已落地）**：单会话内由一个协调者负责读取、分批分派和最终回写，多个执行者只处理自己领取的任务，不直接写 KM 文件。执行并行、写入串行收敛，天然无冲突。协议见 `Workspace/harnessRules/brainstorm-executer/requirement-instruction-breakdown-rules.md` §4.1。
+- **revision 推广（Phase 0.5，已落地）**：把协同链路验证过的 `getKmFileRevision`（文件内容 SHA-256）机制推广到待拆解链路——`km_list_todos` 返回 `kmRevision`，`km_mark_done` 支持可选 `expectedRevision`，并发冲突从“静默覆盖”变为“显式失败 + 重读重试”。
+- **MCP 事务能力（Phase 1，已落地）**：多个**独立写入者**通过旁车状态文件、跨进程文件锁与租约工具链（claim/renew/complete/release）实现真正互不干扰的认领、执行跟踪与状态回写。
+- **观测（Phase 2，按简化口径落地）**：不做独立观测界面，改为在 Webview 右下角节点卡片中展示选中节点的旁车执行状态。
 
-本轮按节点要求只产出方案，不直接修改插件、MCP 工具或规则地图。
+## 2. 改造前基线（历史记录）
 
-## 2. 当前基线
+改造前 MCP 共 8 个工具，两条链路的并发保护水平不一致，这是本设计的出发点：
 
-当前 MCP 共 8 个工具：待拆解链路 5 个（`km_validate` / `km_read` / `km_list_todos` / `km_get_node` / `km_mark_done`），协同链路 3 个（`km_list_collaboration_tasks` / `km_get_collaboration_context` / `km_expand_collaboration`）。两条链路的并发保护水平不一致：
-
-| 能力 | 当前行为 | 并行风险 |
+| 能力 | 改造前行为 | 并行风险 |
 | --- | --- | --- |
-| 待办发现 | `km_list_todos` 每次扫描全部 `待拆解` 节点 | 没有游标、批次、“已领取”状态，也不返回文件版本 |
+| 待办发现 | `km_list_todos` 每次扫描全部 `待拆解` 节点 | 没有批次、“已领取”状态，也不返回文件版本 |
 | 协同任务发现 | `km_list_collaboration_tasks` / `km_get_collaboration_context` 返回文件内容 SHA-256 作为 `fileRevision` | 已具备版本快照，但仅协同链路可用 |
-| 节点上下文 | `km_get_node` 返回节点完整子树 | 可读取，但没有任务快照版本 |
 | 待拆解回写 | `km_mark_done` 读取整文件后重写整文件，无版本校验 | 两个进程同时读写时，后写入者覆盖前者 |
 | 协同回写 | `km_expand_collaboration` 强制 `expectedRevision`，不匹配即拒绝写入 | 有 CAS，但“校验版本→写入”之间无锁，仍有毫秒级 TOCTOU 竞态窗口 |
-| 写入保护 | `safeWriteFile` 有备份和写后 JSON 校验，失败自动回滚 | 直接 `writeFileSync` 覆盖而非临时文件 + rename，没有文件锁和原子临界区 |
-| 层级节点 | 父节点命中后不会继续遍历其子树 | 父子节点混合批量回写会少改子节点 |
-| Webview 外部编辑 | 已支持外部文件监听、干净状态自动刷新、脏状态阻止保存 | 只保护 VS Code 编辑器，不保护多个 MCP 写入进程 |
+| 写入保护 | `safeWriteFile` 备份 + 写后 JSON 校验，失败回滚 | 直接 `writeFileSync` 覆盖而非临时文件 + rename，没有文件锁和原子临界区 |
+| Webview 外部编辑 | 外部文件监听、干净状态自动刷新、脏状态阻止保存 | 只保护 VS Code 编辑器，不保护多个 MCP 写入进程 |
 
-## 3. 推荐架构
+## 3. 架构（与实现一致）
 
-采用“规则协调 + MCP 事务”的混合方案：
+“规则协调 + MCP 事务”混合方案：
 
 ```mermaid
 flowchart TD
-    A[协调者读取并校验 KM] --> B[按叶子待办分批领取]
-    B --> C[执行者 A 处理任务]
-    B --> D[执行者 B 处理任务]
-    B --> E[执行者 C 处理任务]
-    C --> F[MCP complete claim]
-    D --> F
-    E --> F
-    F --> G[锁定并校验文件版本]
-    G --> H[只修改已领取节点并原子写回]
-    H --> I[重新发现新增待办]
-    I --> B
+    A[执行者以 workerId 认领叶子待办<br/>km_claim_todos] --> B[获得 claimId + baseNodeHash + 租约]
+    B --> C[执行者 A 产出]
+    B --> D[执行者 B 产出]
+    C --> E[km_complete_claim]
+    D --> E
+    E --> F[锁内校验租约/节点哈希/待拆解状态]
+    F --> G[只修改认领节点并原子写回 KM]
+    G --> H[旁车状态置 done 并刷新 kmRevision]
+    H --> I[km_list_todos 重新发现新增待办]
+    I --> A
 ```
 
-### 3.1 临时状态放在旁车文件
+实现位置：
 
-不要把 `处理中`、租约和执行者信息写进 KM 节点的 `resource` 标签。这样会触发 Webview 刷新，也会让执行状态污染用户可见标签。
+- 服务层：`src/mcp/services/kmExecState.ts`（旁车、锁、原子写、租约全部逻辑）
+- 工具层：`src/mcp/tools/kmClaimTodos.ts` / `kmRenewClaim.ts` / `kmCompleteClaim.ts` / `kmReleaseClaim.ts`
+- 存量改造：`kmFileWriter.ts`（`markNodesDone` / `expandCollaborationTask` 接入锁）、`kmListTodos.ts`（版本与租约标注）
+- 观测：`src/mindEditor.ts`（旁车监听推送）+ `webui/ui/directive/nodeCard/`（卡片展示）
 
-建议使用旁车文件：`<filePath>.exec.json`。示例：
+### 3.1 旁车状态文件（实际结构）
+
+执行状态不写入 KM 节点的 `resource` 标签（避免触发 Webview 刷新、污染用户可见标签），存放在旁车文件 `<filePath>.exec.json`：
 
 ```json
 {
     "schemaVersion": 1,
-    "kmRevision": "sha256:...",
+    "kmRevision": "<KM 文件内容 SHA-256>",
     "tasks": {
-        "node-id": {
-            "state": "claimed",
-            "claimId": "claim-uuid",
+        "<nodeId>": {
+            "state": "claimed | done | released | failed",
+            "claimId": "<uuid>",
             "workerId": "agent-a",
-            "claimedAt": "2026-07-19T10:00:00.000Z",
-            "leaseUntil": "2026-07-19T10:10:00.000Z",
-            "baseNodeHash": "sha256:..."
+            "claimedAt": "2026-07-26T10:00:00.000Z",
+            "leaseUntil": "2026-07-26T10:10:00.000Z",
+            "baseNodeHash": "<认领时节点内容 SHA-256>",
+            "doneAt": "（state=done 时）",
+            "completedBy": "claim | legacy（state=done 时）",
+            "releasedAt": "（state=released 时）",
+            "failedAt": "（state=failed 时）",
+            "failReason": "（state=failed 时）"
         }
     }
 }
 ```
 
-KM 本身只保留用户语义状态：`待拆解` 和 `已完成`。旁车文件丢失时，可以从 KM 重新构建全部 `pending` 任务。
+- KM 本身只保留用户语义标签：`待拆解` / `待协同` / `已完成`。
+- 旁车文件丢失或损坏时按空状态处理，全部任务视为 `pending`，可从 KM 重建，不影响正确性。
+- `baseNodeHash` 为节点自身规范化内容（`{id, text, resource 排序}`）的 SHA-256，认领时由服务端写入，完成时以此为准校验，调用方无需传递哈希。
 
-### 3.2 任务状态机
-
-```text
-pending -> claimed -> done
-             |          |
-             v          v
-          released    archived
-             ^
-             |
-        lease expired
-```
-
-- `pending`：节点有 `待拆解`，没有有效租约。
-- `claimed`：某个执行者暂时拥有任务，其他执行者不能领取。
-- `done`：MCP 已验证输出物并将 KM 标签改为 `已完成`。
-- `released`：执行者主动放弃，回到 `pending`。
-- 租约过期后自动回到 `pending`，避免执行者崩溃造成永久阻塞。
-- 只有叶子待办进入 `claimed`。父节点在所有子节点完成后，由协调者单独汇总完成，避免父子节点批处理遍历冲突。
-
-## 4. MCP 工具设计
-
-### 4.1 `km_list_todos`
-
-向后兼容现有参数，增加可选参数：
+### 3.2 任务状态机（实际实现）
 
 ```text
-filePath: string
-limit?: number
-cursor?: string
-includeClaimed?: boolean
-workerId?: string
+pending ──claim──> claimed ──complete──> done
+             ▲        │
+             │        ├─ release ──> released ─┐
+             │        ├─ fail ─────> failed  ──┤（均可重新认领）
+             │        └─ 租约过期（隐式回到 pending）
+             └─────────────────────────────────┘
 ```
 
-返回 `kmRevision`、下一页游标、节点状态和租约摘要。默认只返回 `pending` 叶子节点，保证一个批次不会重复领取父子节点。
+- `pending`：节点带 `待拆解` 且没有有效租约（旁车无条目，或条目为 released/failed/租约过期）。
+- `claimed`：被某执行者认领且租约未过期；其他执行者不能认领，`km_mark_done` 也被拒绝。
+- `done`：节点标签已改为 `已完成`；`completedBy` 区分经由 `km_complete_claim`（claim）还是 `km_mark_done`（legacy）。
+- `released` / `failed`：主动放弃或记录失败原因，KM 节点保持 `待拆解`，等价于回到 `pending`。
+- 租约过期不需要清理动作：认领判定只看 `leaseUntil`，过期任务自动可被重新认领；续租与完成则被拒绝。
+- 只有**叶子待办**（子树中不再包含其他 `待拆解`）可被认领；父级待办由发起方在子任务全部完成后单独汇总回写。
+
+## 4. MCP 工具（最终实现）
+
+### 4.1 `km_list_todos`（增强）
+
+```text
+入参：filePath
+返回：{ filePath, kmRevision, todoCount, todos[] }
+todos[] 每项额外携带：
+  isLeaf: boolean          — 是否叶子待办（可认领）
+  execState: 'pending' | 'claimed'
+  claimedBy / leaseUntil   — 仅 execState=claimed 时返回
+```
+
+与提案的差异：未引入 `limit` / `cursor` 分页和 `includeClaimed` 过滤——现返回全部待办（含父级），由 `isLeaf` 与 `execState` 标注代替服务端过滤，调用方自行筛选，接口保持无状态。
 
 ### 4.2 `km_claim_todos`
 
 ```text
-filePath: string
-workerId: string
-limit: number
-nodeIds?: string[]
-leaseSeconds?: number
-expectedKmRevision?: string
+入参：filePath, workerId（必填）
+     limit?（默认 5，未指定 nodeIds 时生效）
+     nodeIds?（显式指定；任一节点不可认领则整体失败，不产生部分认领）
+     leaseSeconds?（默认 600）
+     expectedKmRevision?（版本不符拒绝认领）
+返回：{ filePath, kmRevision, claimId, workerId, leaseUntil, claimedCount,
+       tasks: [{ nodeId, text, path, baseNodeHash }] }
 ```
 
-在一次临界区内完成：读取当前 KM、校验节点仍为 `pending`、写入旁车租约、返回 `claimId`、节点快照哈希和新的 revision。领取失败时不修改任何节点。
+在一次锁临界区内完成：读取当前 KM → 计算叶子待办 → 跳过有效租约节点 → 写入旁车租约。无可认领节点时返回 `claimId: null` 的空结果而不报错。认领不修改 KM 本身。
 
 ### 4.3 `km_renew_claim`
 
-使用 `claimId` 延长租约。只能由原 `workerId` 续租，已完成或已释放的任务不可续租。
+```text
+入参：filePath, claimId, workerId（必须与认领时一致）, leaseSeconds?（默认 600）
+返回：{ filePath, renewedCount, leaseUntil }
+```
+
+只能由原 `workerId` 续租；租约已过期、已完成或已释放的任务续租失败（过期即视为回到待认领状态）。
 
 ### 4.4 `km_complete_claim`
 
 ```text
-filePath: string
-claimId: string
-nodeIds: string[]
-expectedNodeHashes: Record<string, string>
+入参：filePath, claimId
+     nodeIds?（只完成该 claim 的部分节点，默认全部）
+     dryRun?（只校验不写入）
+返回：{ filePath, dryRun, completedCount, nodeIds, revisionBefore, revisionAfter, verified }
 ```
 
-在锁内重新读取 KM，验证：
+在锁内重新读取 KM 并逐项验证：
 
-1. `claimId` 属于当前执行者且租约未过期。
-2. 所有目标节点仍存在，且节点哈希与领取时一致。
-3. 节点仍包含 `待拆解`，没有 `已完成` 冲突。
+1. `claimId` 下的目标任务处于 `claimed` 且租约未过期；
+2. 目标节点仍存在，且当前节点哈希与旁车记录的 `baseNodeHash` 一致（认领后被人工/并发修改即冲突拒绝）；
+3. 节点仍为 `待拆解` 且无 `已完成` 冲突。
 
-验证通过后，只修改这些节点的标签，原子写回 KM，再更新旁车状态为 `done`。其他执行者已经完成的节点不得被旧快照覆盖。
+全部通过后仅修改这些节点标签、原子写回 KM，再把旁车条目置 `done` 并刷新 `kmRevision`。任何一项校验失败则整体拒绝、零写入，其他执行者已完成的节点不会被旧快照覆盖。
 
-### 4.5 `km_release_claim` / `km_fail_claim`
+与提案的差异：不要求调用方传 `expectedNodeHashes`——认领时服务端已把 `baseNodeHash` 写入旁车，完成时以旁车记录为准，更可靠且减小 API 面。
 
-释放或记录失败原因，并让任务重新进入 `pending`。失败不能自动把 KM 节点标成 `已完成`。
+### 4.5 `km_release_claim`（合并 release 与 fail）
 
-### 4.6 兼容现有 `km_mark_done`
+```text
+入参：filePath, claimId, nodeIds?, failReason?
+返回：{ filePath, releasedCount, state: 'released' | 'failed' }
+```
 
-保留现有工具，但内部必须经过同一套文件锁和版本校验。传入父子节点时，要么拆成叶子优先的独立操作，要么明确返回“父节点命中后跳过子树”的结果，不能静默少改节点。
+不带 `failReason` 记为 `released`，带 `failReason` 记为 `failed`（保留审计信息）；两种情况下 KM 节点都保持 `待拆解`，可被重新认领。失败永远不会把节点标成 `已完成`。
 
-过渡期可先复用协同链路已验证的 `getKmFileRevision` 机制，为 `km_mark_done` 增加可选 `expectedRevision` 参数（不传则维持现状，向后兼容）：传入时在写回前比对文件 SHA-256，不匹配即拒绝并要求调用方重读 `km_list_todos`。同时让 `km_list_todos` 像 `km_list_collaboration_tasks` 一样返回 `kmRevision`。这两处改动量极小，即可把待拆解链路从“静默覆盖”提升到“冲突可检测”。
+与提案的差异：`km_release_claim` 与 `km_fail_claim` 合并为一个工具。
 
-## 5. 并发与写入协议
+### 4.6 存量工具改造
 
-1. 对每个 KM 文件使用 `<filePath>.lock` 旁车锁，使用原子创建（`wx`）获取锁，并记录持有者和过期时间。
-2. 所有 claim、complete、release 和 legacy mark-done 都必须在锁内重新读取文件，不能复用调用方之前的内存快照。
-3. KM 写入采用临时文件写入、JSON 解析校验、同目录 rename 替换，避免读到半文件。
-4. 版本使用 KM 内容 SHA-256；节点使用规范化 JSON 的 SHA-256。文件发生无关节点变化时，允许完成互不相交的 claim；目标节点自身变化时返回冲突。
-5. 进程崩溃不需要回滚 KM：未完成的任务仍保持 `待拆解`，租约过期后可重新领取。
-6. 旁车锁、旁车执行状态和临时文件都必须在成功写回后清理或更新，不能进入 VSIX 包。
+- `km_mark_done`：整个读-改-写在同一把文件锁内执行；支持可选 `expectedRevision`（来自 `km_list_todos` 的 `kmRevision`）；目标节点存在**有效租约**时直接拒绝，提示改用 `km_complete_claim` 或先 `km_release_claim`；写回成功后同步旁车条目为 `done`（`completedBy: 'legacy'`）并刷新旁车 `kmRevision`。定位为无租约冲突的单写入者场景。
+- `km_expand_collaboration`：版本校验与写入纳入同一把锁，消除原“校验通过后被并发写入”的 TOCTOU 竞态窗口；写回后同步旁车 `kmRevision`。
+- `safeWriteFile`：由“备份-覆盖-回滚”升级为“临时文件写入 + JSON 校验 + rename 原子替换”。
 
-## 6. 规则层执行流程
+## 5. 并发与写入协议（实现参数）
 
-在 MCP 增强完成前，规则可以先采用以下无代码方案：
+1. 每个 KM 文件使用旁车锁 `<filePath>.lock`：`fs.openSync(…, 'wx')` 原子创建获得，锁文件记录 `pid` / `acquiredAt` / `expiresAt`。
+2. 锁有效期 10 秒（`LOCK_EXPIRE_MS`）；等待方按 50ms 间隔自旋重试，最多 40 次（约 2 秒）后报“获取文件锁超时”；发现过期残留锁直接抢占清理。
+3. claim、renew、complete、release、legacy mark-done 与协同扩散全部在锁内**重新读取**文件，不复用调用方之前的内存快照。
+4. KM 与旁车写入均采用临时文件（`<file>.tmp-<pid>-<随机>`）写入、JSON 解析校验、同目录 rename 替换，读取方不会读到半文件；失败时清理临时文件。
+5. 文件版本 = KM 内容 SHA-256；节点版本 = 节点规范化 JSON（`{id, text, resource 排序}`）的 SHA-256。文件发生无关节点变化时允许完成互不相交的 claim；目标节点自身变化时返回冲突。
+6. 进程崩溃不需要回滚：未完成任务保持 `待拆解`，租约过期后可重新认领；锁过期后可被抢占。
+7. 旁车锁、旁车状态与临时文件均为运行时产物，`dist` 目录被 .gitignore 屏蔽，不进入 VSIX 包。
 
-1. 协调者只读取一次基线，按叶子节点划分批次，并为每批生成唯一 `batchId` 和节点 ID 清单。
-2. 执行者只接收自己的批次上下文，不读取或修改其他执行者的任务状态。
-3. 执行者把输出物写入指定目标，但不直接调用 `km_mark_done`。
-4. 协调者验证输出物后，按叶子节点分批 dry-run 和回写；父节点最后单独回写。
-5. 执行期间每轮重新调用 `km_list_todos`，发现新增 `待拆解` 节点后加入下一批，不必等待当前批次全部结束。
-6. 任何批次失败只保留其节点为 `待拆解`，已完成批次可以独立回写。
+## 6. 规则层执行流程（已写入执行规则 §4.1）
 
-这个规则层方案能实现执行并行，但仍只有协调者写文件，因此不能称为多个独立写入者的完全并发。它适合作为第一阶段的低风险过渡。
+规则文件 `requirement-instruction-breakdown-rules.md` §4.1 定义了两种模式：
 
-## 7. 验收场景
+**单会话协调者模式（Phase 0）**：协调者按叶子分批分派（唯一批次标识 + 节点 ID 清单），执行者只产出不写 KM；协调者验证输出后携带最新 `kmRevision` 作为 `expectedRevision` 串行回写，父节点最后单独回写；每轮回写后重新 `km_list_todos` 滚动纳入新增待办；失败批次只保留其节点为 `待拆解`。
 
-- 两个执行者同时领取 10 个叶子节点，节点集合不重叠，领取结果可追踪。
-- 执行者 A 完成节点 1，执行者 B 完成节点 2；两次回写后节点 1 和 2 都是 `已完成`，互不覆盖。
-- A 领取期间新增节点 3；下一次列表查询可以领取节点 3，不影响 A 的租约。
-- A 崩溃，租约过期后节点 1 可被 C 重新领取。
-- 节点文本在领取后被人工修改，A 完成时返回版本冲突，不能覆盖人工修改。
-- Webview 有未保存草稿时，外部 agent 写入 KM，界面提示冲突，普通保存被阻止。
-- 父节点和子节点同时出现在候选集合时，只领取叶子；父节点在子任务全部完成后再单独汇总。
-- 重复节点 ID、损坏 JSON、锁文件残留和进程中断均有可验证的失败路径。
+**多写入者租约模式（Phase 1）**：跨会话/进程的执行者各自以唯一 `workerId` 认领（`km_claim_todos`）→ 长任务续租（`km_renew_claim`）→ 完成（`km_complete_claim`，先 dry-run）→ 放弃或失败时释放（`km_release_claim` + `failReason`）。被有效租约认领的节点禁止经 `km_mark_done` 回写。
 
-## 8. 分阶段落地建议
+## 7. 验收场景与测试覆盖
 
-### Phase 0：规则协调
+设计验收场景已由 `tests/km-exec-claims.test.cjs`（10 例）与 `tests/km-file-writer.test.cjs`（新增 5 例）覆盖，全量 42 个测试通过：
 
-只调整执行流程和批次协议，保留现有 8 个 MCP 工具。目标是让多个执行者并行产出，但由单一协调者串行回写。
+| 验收场景 | 覆盖用例 |
+| --- | --- |
+| 只认领叶子、父级排除，认领结果可追踪 | claim only targets leaf todos and skips parents |
+| 两执行者认领集合不重叠；显式抢占被拒 | second worker cannot claim nodes under an active lease |
+| A、B 各自完成互不覆盖；旁车同步 done | complete claim marks nodes done atomically and updates sidecar |
+| 节点在认领后被人工修改，完成时版本冲突且零写入 | complete claim rejects when node was modified after claiming |
+| 执行者崩溃，租约过期后任务可被重新认领；过期不可完成/续租 | expired lease returns task to pending and blocks completion |
+| 仅原认领者可续租 | renew extends lease for the original worker only |
+| 释放/失败后回到待认领，失败原因留档 | release and fail return tasks to pending for re-claiming |
+| 活跃租约保护 legacy 回写；释放后恢复并同步旁车 | legacy mark done is blocked for actively claimed nodes |
+| 残留锁抢占、临界区后锁清理、有效锁阻塞 | stale lock file is preempted and lock is cleaned after critical section |
+| 过期版本拒绝认领 | claim with stale expectedKmRevision is rejected |
+| mark_done 版本冲突拒绝且零写入 | mark done with stale expectedRevision is rejected without writing |
+| Webview 脏状态下外部写入提示冲突、阻止普通保存 | 既有外部编辑冲突机制（refresh-flow） |
 
-### Phase 0.5：revision 推广（小改动过渡）
+## 8. 分阶段落地记录
 
-把协同链路已验证的文件版本机制推广到待拆解链路：`km_list_todos` 返回 `kmRevision`，`km_mark_done` 增加可选 `expectedRevision`。不引入锁和租约，仅让并发冲突从“静默覆盖”变为“显式失败 + 重读重试”。改动集中在两个工具的入参出参，schema 向后兼容。
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| Phase 0 规则协调 | 分批并行执行协议写入执行规则 §4.1，单协调者串行回写 | ✅ 2026-07-26 |
+| Phase 0.5 revision 推广 | `km_list_todos` 返回 `kmRevision`；`km_mark_done` 可选 `expectedRevision` | ✅ 2026-07-26 |
+| Phase 1 MCP 事务能力 | 旁车状态、文件锁、原子写、claim/renew/complete/release 四工具，存量工具加锁与租约保护 | ✅ 2026-07-26 |
+| Phase 2 观测（简化） | 不做独立观测界面：扩展端监听 `<km>.exec.json` 推送 Webview，右下角节点卡片展示执行状态/认领人/租约到期/失败原因（含“租约过期”态） | ✅ 2026-07-26 |
 
-### Phase 1：MCP 事务能力
+Phase 2 简化实现链路：`mindEditor.ts` 为每个打开的 KM 文档额外创建 `<km>.exec.json` 的 FileSystemWatcher（创建/变化/删除均触发），读取旁车 `tasks` 后以 `execState` 消息推送 Webview，编辑器握手（ready/loaded）时推送一次初始状态；`webui/main.js` 收到消息后写入 `window.kmExecState` 并派发 `km-exec-state` 事件；`nodeCard` 指令据此渲染执行状态区块，卡片可见时实时刷新。原设计中的批次状态查询与审计日志（完整 Phase 2）未实现，如后续需要可基于旁车文件直接扩展。
 
-增加旁车状态、文件锁、claim/renew/complete/release 工具，并为现有 `km_mark_done` 与 `km_expand_collaboration` 加锁（消除 CAS 校验与写入之间的竞态窗口）和父子节点保护。
+## 9. 最终结论
 
-### Phase 2：观测与界面
+“执行规则流程调整”满足单会话内的分批并行拆解、执行跟踪与回写（Phase 0）；“插件功能优化”是多个独立智能体真正互不干扰并发写入的必要条件（Phase 0.5 + Phase 1），两者是递进关系而非二选一。当前实现下：
 
-增加批次状态查询、租约剩余时间、失败原因和审计日志。只有在用户确实需要时，再在插件界面展示“处理中”等临时状态。
-
-## 9. 本轮决策
-
-推荐先落地 Phase 0 验证执行协议，随后以 Phase 0.5 把 revision 校验推广到待拆解链路，最后再实现 Phase 1。原因是：
-
-1. 并行任务的边界、叶子优先和父节点汇总规则可以先在不改变文件格式和工具 schema 的情况下验证；
-2. 协同链路的 `expectedRevision` 模式已在生产使用中被验证，推广到 `km_mark_done` 成本极小、收益明确；
-3. 确认协议稳定后，再引入锁和租约，降低 MCP schema 变更风险。
-
-对应到原始需求的回答：“执行规则流程调整”即可满足单会话内的分批并行拆解、执行跟踪与回写（Phase 0）；“插件功能优化”是实现多个独立智能体真正互不干扰并发写入的必要条件（Phase 0.5 + Phase 1），两者是递进关系而非二选一。
+- 单会话并行 → 协调者模式，零额外成本；
+- 跨会话/跨进程并行 → 租约模式，冲突全部显式失败、零静默覆盖；
+- 执行可观测 → 节点卡片直读旁车状态，无需额外查询工具。

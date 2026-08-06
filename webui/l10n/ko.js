@@ -191,6 +191,15 @@ define(function (require, exports, module) {
 					ok: "확신하는",
 					cancel: "취소",
 				},
+				nodeSplit: {
+					title: "노드 분할",
+					"root-title": "마인드맵 복사",
+					description: "이 노드와 모든 하위 노드로 새 맵을 만든 다음 현재 맵에서 제거할까요?",
+					"root-description": "루트 노드는 제거할 수 없습니다. 복사본을 만들고 현재 맵은 그대로 둘까요?",
+					confirm: "노드 분할",
+					copy: "복사본 만들기",
+					cancel: "취소",
+				},
 			},
 		},
 		runtime: {
@@ -208,6 +217,13 @@ define(function (require, exports, module) {
 				topic: "분기 주제",
 				importnode: "노드 가져오기",
 				exportnode: "내보내기 노드",
+			},
+			nodeSplit: {
+				label: "노드 분할",
+				changed: "새 맵은 생성되었지만 원본 하위 트리가 변경되어 여기에 유지되었습니다.",
+				missingid: "안정적인 ID가 없어 이 노드를 분할할 수 없습니다.",
+				failed: "노드를 분할하지 못했습니다. 원본은 변경되지 않았습니다.",
+				timeout: "분할 요청 시간이 초과되었습니다. 원본은 변경되지 않았습니다.",
 			},
 			input: {
 				edit: "편집하다",

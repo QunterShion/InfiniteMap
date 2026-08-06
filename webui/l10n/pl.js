@@ -191,6 +191,15 @@ define(function (require, exports, module) {
 					ok: "Jasne",
 					cancel: "Anulować",
 				},
+				nodeSplit: {
+					title: "Podziel węzeł",
+					"root-title": "Kopiuj mapę myśli",
+					description: "Utworzyć nową mapę z tego węzła i jego potomków, a następnie usunąć je z tej mapy?",
+					"root-description": "Nie można usunąć korzenia. Utworzyć kopię i pozostawić tę mapę bez zmian?",
+					confirm: "Podziel węzeł",
+					copy: "Utwórz kopię",
+					cancel: "Anuluj",
+				},
 			},
 		},
 		runtime: {
@@ -208,6 +217,13 @@ define(function (require, exports, module) {
 				topic: "temat branżowy",
 				importnode: "Importuj węzeł",
 				exportnode: "węzeł eksportowy",
+			},
+			nodeSplit: {
+				label: "Podziel węzeł",
+				changed: "Nowa mapa została utworzona, ale poddrzewo źródłowe zmieniło się i zostało zachowane.",
+				missingid: "Tego węzła nie można podzielić bez stabilnego ID.",
+				failed: "Nie udało się podzielić węzła. Źródło pozostało bez zmian.",
+				timeout: "Żądanie wygasło. Źródło pozostało bez zmian.",
 			},
 			input: {
 				edit: "edytować",

@@ -93,6 +93,8 @@ const tabGroups = {
   },
 };
 let nextWarningAction;
+let nextSaveDialogUri;
+const saveDialogOptions = [];
 const vscode = {
   CancellationToken: { None: undefined },
   EventEmitter: MockEventEmitter,
@@ -122,6 +124,12 @@ const vscode = {
     showErrorMessage: async (message) => {
       errorMessages.push(message);
       return undefined;
+    },
+    showSaveDialog: async (options) => {
+      saveDialogOptions.push(options);
+      const result = nextSaveDialogUri;
+      nextSaveDialogUri = undefined;
+      return result;
     },
     showWarningMessage: async (message) => {
       warningMessages.push(message);
@@ -281,7 +289,7 @@ test('custom document keeps drafts in memory and completes the save contract', a
   t.after(() => panel.panel.dispose());
   await provider.resolveCustomEditor(document, panel.panel);
   await panel.dispatch({ command: 'ready' });
-  assert.equal(panel.sent.at(-1).command, 'import');
+  assert.equal(panel.sent.filter((message) => message.command === 'import').at(-1).command, 'import');
 
   let changeCount = 0;
   provider.onDidChangeCustomDocument(() => {
@@ -408,8 +416,9 @@ test('refreshes a clean document from disk through the custom document provider'
 
   await provider.resolveCustomEditor(document, panel.panel);
   await panel.dispatch({ command: 'loaded' });
-  assert.equal(panel.sent.at(-1).command, 'import');
-  assert.equal(panel.sent.at(-1).importData, original);
+  const initialImport = panel.sent.filter((message) => message.command === 'import').at(-1);
+  assert.equal(initialImport.command, 'import');
+  assert.equal(initialImport.importData, original);
   fs.writeFileSync(sourcePath, refreshed);
 
   await panel.dispatch({ command: 'refresh' });
@@ -887,5 +896,80 @@ test('reloads an unresponsive visible webview in place and ignores hidden panels
   assert.equal(panel.htmlAssignments.length, initialHtmlAssignments + 1);
   assert.equal(panel.getDisposeCount(), 0);
   assert.equal(executedCommands.some(([command]) => command === 'vscode.openWith'), false);
+  document.dispose();
+});
+
+test('creates a split file before acknowledging removal and never overwrites the source', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-provider-split-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const sourcePath = path.join(tempDir, 'source.km');
+  const destinationPath = path.join(tempDir, 'Child.km');
+  const original = '{"root":{"data":{"text":"Root"}}}';
+  const split = '{"root":{"data":{"id":"child","text":"Child"},"children":[{"data":{"text":"Leaf"}}]},"theme":"fresh-blue"}';
+  fs.writeFileSync(sourcePath, original);
+
+  const provider = new MindEditorProvider({ extensionPath: path.resolve(__dirname, '..'), subscriptions: [] });
+  const document = await provider.openCustomDocument(MockUri.file(sourcePath), {
+    backupId: undefined,
+    untitledDocumentData: undefined,
+  });
+  const panel = createPanel();
+  t.after(() => panel.panel.dispose());
+  await provider.resolveCustomEditor(document, panel.panel);
+
+  nextSaveDialogUri = MockUri.file(destinationPath);
+  await panel.dispatch({
+    command: 'splitNode',
+    requestId: 'split-1',
+    nodeText: 'Child',
+    isRoot: false,
+    content: split,
+  });
+  assert.deepEqual(JSON.parse(fs.readFileSync(destinationPath, 'utf8')), JSON.parse(split));
+  assert.equal(fs.readFileSync(sourcePath, 'utf8'), original);
+  assert.deepEqual(panel.sent.at(-1), { command: 'splitNodeResult', requestId: 'split-1', ok: true });
+  assert.equal(saveDialogOptions.at(-1).defaultUri.fsPath, destinationPath);
+
+  await panel.dispatch({
+    command: 'splitNode',
+    requestId: 'split-cancelled',
+    nodeText: 'Child',
+    isRoot: false,
+    content: split,
+  });
+  assert.deepEqual(panel.sent.at(-1), {
+    command: 'splitNodeResult',
+    requestId: 'split-cancelled',
+    ok: false,
+    cancelled: true,
+  });
+  assert.equal(fs.readFileSync(sourcePath, 'utf8'), original);
+
+  nextSaveDialogUri = MockUri.file(path.join(tempDir, 'invalid.km'));
+  await panel.dispatch({
+    command: 'splitNode',
+    requestId: 'split-invalid',
+    nodeText: 'Child',
+    isRoot: false,
+    content: '{"theme":"missing-root"}',
+  });
+  assert.equal(panel.sent.at(-1).requestId, 'split-invalid');
+  assert.equal(panel.sent.at(-1).ok, false);
+  assert.equal(fs.existsSync(path.join(tempDir, 'invalid.km')), false);
+  assert.equal(fs.readFileSync(sourcePath, 'utf8'), original);
+
+  nextSaveDialogUri = MockUri.file(sourcePath);
+  await panel.dispatch({
+    command: 'splitNode',
+    requestId: 'split-2',
+    nodeText: 'Root',
+    isRoot: true,
+    content: split,
+  });
+  assert.equal(panel.sent.at(-1).command, 'splitNodeResult');
+  assert.equal(panel.sent.at(-1).requestId, 'split-2');
+  assert.equal(panel.sent.at(-1).ok, false);
+  assert.match(panel.sent.at(-1).error, /different file name/);
+  assert.equal(fs.readFileSync(sourcePath, 'utf8'), original);
   document.dispose();
 });

@@ -192,6 +192,15 @@ define(function (require, exports, module) {
 					ok: "biztos",
 					cancel: "Megszünteti",
 				},
+				nodeSplit: {
+					title: "Csomópont felosztása",
+					"root-title": "Gondolattérkép másolása",
+					description: "Új térkép létrehozása ebből a csomópontból és leszármazottaiból, majd eltávolításuk innen?",
+					"root-description": "A gyökér nem távolítható el. Készüljön másolat, az eredeti térkép változatlanul hagyásával?",
+					confirm: "Csomópont felosztása",
+					copy: "Másolat létrehozása",
+					cancel: "Mégse",
+				},
 			},
 		},
 		runtime: {
@@ -209,6 +218,13 @@ define(function (require, exports, module) {
 				topic: "ág témája",
 				importnode: "Csomópont importálása",
 				exportnode: "export csomópont",
+			},
+			nodeSplit: {
+				label: "Csomópont felosztása",
+				changed: "Az új térkép elkészült, de a forrás részfa megváltozott, ezért megmaradt.",
+				missingid: "Ez a csomópont stabil ID nélkül nem osztható fel.",
+				failed: "A csomópont felosztása sikertelen. A forrás változatlan maradt.",
+				timeout: "A kérés időtúllépés miatt megszakadt. A forrás változatlan maradt.",
 			},
 			input: {
 				edit: "szerkeszteni",

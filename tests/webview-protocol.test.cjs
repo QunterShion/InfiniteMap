@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 test('webview startup and refresh imports expose explicit protocol acknowledgements', async () => {
   const postedMessages = [];
+  const selectedTemplates = [];
   const windowListeners = new Map();
   let controllerFactory;
   const importedData = [];
@@ -52,6 +53,7 @@ test('webview startup and refresh imports expose explicit protocol acknowledgeme
   controllerFactory(scope);
   scope.initEditor({}, {
     on: () => undefined,
+    setTemplate: (template) => selectedTemplates.push(template),
     importJson(data) {
       if (data.fail) throw new Error('invalid map');
       importedData.push(data);
@@ -59,6 +61,7 @@ test('webview startup and refresh imports expose explicit protocol acknowledgeme
   });
 
   assert.equal(windowListeners.has('message'), true);
+  assert.deepEqual(selectedTemplates, ['right']);
   assert.equal(postedMessages.length, 1);
   assert.deepEqual(
     JSON.parse(JSON.stringify(postedMessages[0])),
@@ -81,11 +84,40 @@ test('webview startup and refresh imports expose explicit protocol acknowledgeme
     },
   });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(JSON.parse(JSON.stringify(importedData)), [{ root: { data: { text: 'refreshed' } } }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(importedData)), [{
+    root: { data: { text: 'refreshed' } },
+    template: 'right',
+  }]);
   assert.deepEqual(
     JSON.parse(JSON.stringify(postedMessages.at(-1))),
     { command: 'importResult', importRequestId: 'refresh-1', ok: true }
   );
+
+  messageHandler({
+    data: {
+      command: 'import',
+      extName: '.km',
+      importData: '{"root":{"data":{"text":"classic"}},"template":"default"}',
+      importRequestId: 'refresh-explicit-template',
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(importedData.at(-1).template, 'default');
+
+  messageHandler({
+    data: {
+      command: 'import',
+      extName: '.km',
+      importData: '{}',
+      fileStem: 'New map',
+      importRequestId: 'refresh-empty-map',
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(importedData.at(-1))), {
+    root: { data: { text: 'New map' }, children: [] },
+    template: 'right',
+  });
 
   messageHandler({
     data: {

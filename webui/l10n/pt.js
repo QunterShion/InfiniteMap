@@ -191,6 +191,15 @@ define(function (require, exports, module) {
 					ok: "Claro",
 					cancel: "Cancelar",
 				},
+				nodeSplit: {
+					title: "Dividir nó",
+					"root-title": "Copiar mapa mental",
+					description: "Criar um novo mapa com este nó e seus descendentes e depois removê-los deste mapa?",
+					"root-description": "O nó raiz não pode ser removido. Criar uma cópia e manter este mapa inalterado?",
+					confirm: "Dividir nó",
+					copy: "Criar cópia",
+					cancel: "Cancelar",
+				},
 			},
 		},
 		runtime: {
@@ -208,6 +217,13 @@ define(function (require, exports, module) {
 				topic: "tópico do ramo",
 				importnode: "Nó de importação",
 				exportnode: "nó de exportação",
+			},
+			nodeSplit: {
+				label: "Dividir nó",
+				changed: "O novo mapa foi criado, mas a subárvore de origem mudou e foi mantida aqui.",
+				missingid: "Este nó não pode ser dividido sem um ID estável.",
+				failed: "Não foi possível dividir o nó. A origem permaneceu inalterada.",
+				timeout: "A solicitação expirou. A origem permaneceu inalterada.",
 			},
 			input: {
 				edit: "editar",

@@ -190,6 +190,15 @@ define(function(require, exports, module) {
                     'title': '导出节点',
                     'ok': '确定',
                     'cancel': '取消'
+                },
+                'nodeSplit': {
+                    'title': '拆分节点',
+                    'root-title': '复制思维导图',
+                    'description': '将此节点及其全部子节点创建为新的思维导图，然后从当前导图中移除？',
+                    'root-description': '根节点不能移除。是否创建一份新副本并保持当前导图不变？',
+                    'confirm': '拆分节点',
+                    'copy': '创建副本',
+                    'cancel': '取消'
                 }
             }
         },
@@ -208,6 +217,13 @@ define(function(require, exports, module) {
                 'topic': '分支主题',
                 'importnode': '导入节点',
                 'exportnode': '导出节点'
+            },
+            'nodeSplit': {
+                'label': '拆分节点',
+                'changed': '新导图已创建，但源子树发生了变化，因此已保留在当前导图中。',
+                'missingid': '此节点缺少稳定 ID，无法拆分。',
+                'failed': '节点拆分失败，源节点已保持不变。',
+                'timeout': '拆分请求超时，源节点已保持不变。'
             },
             'input': {
                 'edit': '编辑'

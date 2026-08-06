@@ -189,6 +189,15 @@ define(function(require, exports, module) {
                     'title': 'Knoten exportieren',
                     'ok': 'OK',
                     'cancel': 'Abbrechen'
+                },
+                'nodeSplit': {
+                    'title': 'Knoten aufteilen',
+                    'root-title': 'Mindmap kopieren',
+                    'description': 'Eine neue Mindmap aus diesem Knoten und seinen Unterknoten erstellen und sie danach hier entfernen?',
+                    'root-description': 'Der Wurzelknoten kann nicht entfernt werden. Eine Kopie erstellen und diese Mindmap unverändert lassen?',
+                    'confirm': 'Knoten aufteilen',
+                    'copy': 'Kopie erstellen',
+                    'cancel': 'Abbrechen'
                 }
             }
         },
@@ -207,6 +216,13 @@ define(function(require, exports, module) {
                 'topic': 'Thema',
                 'importnode': 'Knoten importieren',
                 'exportnode': 'Knoten exportieren'
+            },
+            'nodeSplit': {
+                'label': 'Knoten aufteilen',
+                'changed': 'Die neue Mindmap wurde erstellt, aber der Quellteilbaum wurde geändert und deshalb beibehalten.',
+                'missingid': 'Dieser Knoten kann ohne stabile ID nicht aufgeteilt werden.',
+                'failed': 'Der Knoten konnte nicht aufgeteilt werden. Die Quelle blieb unverändert.',
+                'timeout': 'Zeitüberschreitung beim Aufteilen. Die Quelle blieb unverändert.'
             },
             'input': {
                 'edit': 'Bearbeiten'

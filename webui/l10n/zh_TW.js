@@ -189,6 +189,15 @@ define(function(require, exports, module) {
                     'title': '匯出節點',
                     'ok': '確定',
                     'cancel': '取消'
+                },
+                'nodeSplit': {
+                    'title': '拆分節點',
+                    'root-title': '複製心智圖',
+                    'description': '將此節點及其所有子節點建立為新的心智圖，然後從目前心智圖移除？',
+                    'root-description': '根節點無法移除。是否建立新副本並保持目前心智圖不變？',
+                    'confirm': '拆分節點',
+                    'copy': '建立副本',
+                    'cancel': '取消'
                 }
             }
         },
@@ -207,6 +216,13 @@ define(function(require, exports, module) {
                 'topic': '分支主題',
                 'importnode': '匯入節點',
                 'exportnode': '匯出節點'
+            },
+            'nodeSplit': {
+                'label': '拆分節點',
+                'changed': '新心智圖已建立，但來源子樹已變更，因此保留在目前心智圖中。',
+                'missingid': '此節點缺少穩定 ID，無法拆分。',
+                'failed': '節點拆分失敗，來源節點保持不變。',
+                'timeout': '拆分請求逾時，來源節點保持不變。'
             },
             'input': {
                 'edit': '編輯'

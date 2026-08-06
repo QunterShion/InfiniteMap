@@ -188,6 +188,15 @@ define(function(require, exports, module) {
                     'title': 'Esporta nodo',
                     'ok': 'OK',
                     'cancel': 'Cancella'
+                },
+                'nodeSplit': {
+                    'title': 'Dividi nodo',
+                    'root-title': 'Copia mappa mentale',
+                    'description': 'Creare una nuova mappa da questo nodo e dai suoi discendenti, quindi rimuoverli da questa mappa?',
+                    'root-description': 'Il nodo radice non può essere rimosso. Creare una copia e lasciare invariata questa mappa?',
+                    'confirm': 'Dividi nodo',
+                    'copy': 'Crea copia',
+                    'cancel': 'Annulla'
                 }
             }
         },
@@ -206,6 +215,13 @@ define(function(require, exports, module) {
                 'topic': 'Tema',
                 'importnode': 'Importa nodo',
                 'exportnode': 'Esporta nodo'
+            },
+            'nodeSplit': {
+                'label': 'Dividi nodo',
+                'changed': 'La nuova mappa è stata creata, ma il sottoalbero sorgente è cambiato ed è stato mantenuto.',
+                'missingid': 'Questo nodo non può essere diviso perché non ha un ID stabile.',
+                'failed': 'Impossibile dividere il nodo. La sorgente è rimasta invariata.',
+                'timeout': 'La richiesta è scaduta. La sorgente è rimasta invariata.'
             },
             'input': {
                 'edit': 'Modifica'

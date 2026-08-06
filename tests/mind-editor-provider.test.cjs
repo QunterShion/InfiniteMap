@@ -306,6 +306,8 @@ test('custom document keeps drafts in memory and completes the save contract', a
   await panel.dispatch({ command: 'save', requestId: firstSaveRequest.requestId, exportData: firstDraft });
   await save;
   assert.equal(fs.readFileSync(sourcePath, 'utf8'), firstDraft);
+  assert.equal(fs.existsSync(sourcePath), true, 'editing the root must keep the current KM filename');
+  assert.equal(fs.existsSync(path.join(tempDir, 'draft.km')), false, 'saving a root edit must not rename the KM file');
 
   await panel.dispatch({ command: 'draft', exportData: secondDraft });
   await provider.backupCustomDocument(

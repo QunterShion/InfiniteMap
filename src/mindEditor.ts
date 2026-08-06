@@ -8,7 +8,6 @@ import {
 	suggestSplitPath,
 	writeSplitFile,
 } from './nodeSplit';
-import { RootNameSyncCoordinator } from './rootNameSyncCoordinator';
 const fontPath = path.join(__dirname, '../webui/resvg-js/fonts/Alibaba_PuHuiTi_2.0_45_Light_45_Light.ttf');
 
 const matchableFileTypes: string[] = ['xmind', 'km', 'svg'];
@@ -130,11 +129,7 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 	private pendingImports = new Map<string, PendingImport>();
 	private nextSaveRequestId = 1;
 
-	constructor(
-		public context: vscode.ExtensionContext,
-		private readonly sessionId = extensionHostSessionId,
-		private readonly rootNameSync?: RootNameSyncCoordinator
-	) {
+	constructor(public context: vscode.ExtensionContext, private readonly sessionId = extensionHostSessionId) {
 		this.context = context;
 		logLifecycle('MindEditorProvider.constructor', {
 			viewType,
@@ -148,8 +143,7 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 			viewType,
 			providerType: 'CustomEditorProvider',
 		});
-		const rootNameSync = new RootNameSyncCoordinator();
-		const provider = new MindEditorProvider(context, sessionId, rootNameSync);
+		const provider = new MindEditorProvider(context, sessionId);
 		const providerRegistration = vscode.window.registerCustomEditorProvider(viewType, provider, {
 			webviewOptions: {
 				retainContextWhenHidden: true,
@@ -167,7 +161,6 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 			dispose: () => {
 				recoveryMonitor?.dispose();
 				providerRegistration.dispose();
-				rootNameSync.dispose();
 			},
 		};
 	}
@@ -1343,16 +1336,10 @@ export class MindEditorProvider implements vscode.CustomEditorProvider {
 		if (writesOriginal && document.uri.scheme === 'file') {
 			await this.assertDiskUnchanged(document);
 		}
-		const rootNamePlan = writesOriginal && this.rootNameSync
-			? await this.rootNameSync.planSavedContent(document.uri, content)
-			: undefined;
-		const state = writesOriginal ? this.getDocumentState(document) : undefined;
 		const destinationExtension = path.extname(destination.fsPath) || path.extname(document.uri.fsPath);
 		await this.writeContent(destination.fsPath, destinationExtension, content);
-		if (rootNamePlan && this.rootNameSync) {
-			await this.rootNameSync.applySavedContentPlan(rootNamePlan);
-		}
-		if (state) {
+		if (writesOriginal) {
+			const state = this.getDocumentState(document);
 			state.content = content;
 			state.dirty = false;
 			state.externalConflict = false;

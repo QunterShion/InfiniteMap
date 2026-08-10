@@ -23,10 +23,13 @@ export const LOCK_RETRY_INTERVAL_MS = 50;
 export const LOCK_RETRY_LIMIT = 40;
 
 export type ExecTaskState = 'claimed' | 'done' | 'released' | 'failed';
+export type ExecTaskKind = 'todo' | 'collaboration';
 
 /** 旁车文件中单个任务的租约与状态记录 */
 export interface ExecTaskEntry {
   state: ExecTaskState;
+  /** 旧版旁车没有该字段，读取时按 todo 兼容。 */
+  taskKind?: ExecTaskKind;
   claimId: string;
   workerId: string;
   claimedAt: string;
@@ -36,7 +39,8 @@ export interface ExecTaskEntry {
   releasedAt?: string;
   failedAt?: string;
   failReason?: string;
-  completedBy?: 'claim' | 'legacy';
+  completedBy?: 'claim' | 'collaboration-claim' | 'legacy';
+  generatedNodeIds?: string[];
 }
 
 /** 旁车执行状态文件结构 */
@@ -178,6 +182,32 @@ export function getNodeHash(node: KmNode): string {
     resource: [...(node.data.resource || [])].sort(),
   });
   return crypto.createHash('sha256').update(canonical).digest('hex');
+}
+
+/**
+ * 计算待协同目标完整子树哈希。协同输出依赖目标已有子节点，认领后目标
+ * 子树的任何变化都应阻止旧结果回写；其他兄弟节点变化不影响本哈希。
+ */
+export function getSubtreeHash(node: KmNode): string {
+  function canonicalize(current: KmNode): unknown {
+    const data = current.data as typeof current.data & {
+      infiniteMap?: unknown;
+    };
+    // 运行追溯元数据不属于协同内容语义；认领期间写入会话链接不能使 claim 失效。
+    const { infiniteMap: _infiniteMap, ...stableData } = data;
+    return {
+      data: {
+        ...stableData,
+        resource: [...(current.data.resource || [])].sort(),
+      },
+      children: (current.children || []).map(canonicalize),
+    };
+  }
+
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(canonicalize(node)))
+    .digest('hex');
 }
 
 /** 读取旁车执行状态；文件不存在或损坏时返回空状态（可从 KM 重建） */
@@ -330,6 +360,7 @@ export function claimTodos(
     for (const leaf of targets) {
       execState.tasks[leaf.nodeId] = {
         state: 'claimed',
+        taskKind: 'todo',
         claimId,
         workerId: worker,
         claimedAt,
@@ -384,7 +415,6 @@ export function renewClaim(
     if (entries.length === 0) {
       throw new Error(`未找到处于认领状态的任务，claimId: ${claimId}`);
     }
-
     const now = Date.now();
     for (const { entry } of entries) {
       if (entry.workerId !== workerId) {
@@ -424,6 +454,11 @@ export function completeClaim(
     const entries = findClaimEntries(execState, claimId);
     if (entries.length === 0) {
       throw new Error(`未找到处于认领状态的任务，claimId: ${claimId}`);
+    }
+    if (entries.some(({ entry }) => entry.taskKind === 'collaboration')) {
+      throw new Error(
+        '该 claim 属于待协同任务，请使用 km_complete_collaboration_claim 完成'
+      );
     }
 
     const claimedIds = entries.map(({ nodeId }) => nodeId);
@@ -542,7 +577,7 @@ export function completeClaim(
 
 /**
  * 释放认领：不带 failReason 时记为 released，带 failReason 时记为 failed；
- * 两种情况下 KM 节点都保持"待拆解"，可被重新认领。
+ * 两种情况下 KM 节点标签都保持不变，可被重新认领。
  */
 export function releaseClaim(
   kmPath: string,

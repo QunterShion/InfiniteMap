@@ -29,6 +29,14 @@ import { kmClaimTodosTool, handleKmClaimTodos } from './tools/kmClaimTodos';
 import { kmRenewClaimTool, handleKmRenewClaim } from './tools/kmRenewClaim';
 import { kmCompleteClaimTool, handleKmCompleteClaim } from './tools/kmCompleteClaim';
 import { kmReleaseClaimTool, handleKmReleaseClaim } from './tools/kmReleaseClaim';
+import {
+  kmClaimCollaborationTasksTool,
+  handleKmClaimCollaborationTasks,
+} from './tools/kmClaimCollaborationTasks';
+import {
+  kmCompleteCollaborationClaimTool,
+  handleKmCompleteCollaborationClaim,
+} from './tools/kmCompleteCollaborationClaim';
 
 /** 工具清单 */
 const tools: Tool[] = [
@@ -160,6 +168,8 @@ const tools: Tool[] = [
   kmRenewClaimTool as Tool,
   kmCompleteClaimTool as Tool,
   kmReleaseClaimTool as Tool,
+  kmClaimCollaborationTasksTool as Tool,
+  kmCompleteCollaborationClaimTool as Tool,
 ];
 
 const toolHandlers: Record<string, (args: any) => any> = {
@@ -173,6 +183,8 @@ const toolHandlers: Record<string, (args: any) => any> = {
   km_renew_claim: handleKmRenewClaim,
   km_complete_claim: handleKmCompleteClaim,
   km_release_claim: handleKmReleaseClaim,
+  km_claim_collaboration_tasks: handleKmClaimCollaborationTasks,
+  km_complete_collaboration_claim: handleKmCompleteCollaborationClaim,
   km_get_collaboration_context: handleKmGetCollaborationContext,
   km_expand_collaboration: handleKmExpandCollaboration,
 };
@@ -191,7 +203,7 @@ export async function startServer() {
         tools: {},
       },
       instructions:
-        'All .km reads, task discovery, node inspection, validation, and writes must use these MCP tools. Never read or write .km files through shell or filesystem APIs. Always pass an absolute filePath and reread the current file for every new request. When the user only provides a .km path, discover pending breakdown and collaboration tasks first. Before km_mark_done or km_expand_collaboration, validate the file and run dryRun. When writing back with km_mark_done, pass the kmRevision returned by km_list_todos as expectedRevision so concurrent modifications are rejected instead of silently overwritten. For collaboration, read the latest context, pass its fileRevision as expectedRevision, generate unlabeled child nodes, then validate and list tasks again. For parallel execution by multiple independent workers, use the lease workflow instead of km_mark_done: km_claim_todos to claim leaf todos (returns claimId), km_renew_claim to extend the lease during long work, km_complete_claim to verify-and-complete atomically, and km_release_claim to give tasks back (optionally with failReason). Nodes claimed under an active lease are protected from km_mark_done.',
+        'All .km reads, task discovery, node inspection, validation, and writes must use these MCP tools. Never read or write .km files through shell or filesystem APIs. Always pass an absolute filePath and reread the current file for every new request. When the user only provides a .km path, discover pending breakdown and collaboration tasks first. Before any completion write, validate the file and run dryRun. Single-writer breakdown uses km_mark_done with kmRevision; single-writer collaboration uses km_expand_collaboration with fileRevision. Multiple independent writers must use leases: km_claim_todos + km_complete_claim for breakdown, or km_claim_collaboration_tasks + km_complete_collaboration_claim for collaboration; both workflows reuse km_renew_claim and km_release_claim. Active leases protect nodes from legacy completion tools.',
     }
   );
 

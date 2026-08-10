@@ -6,7 +6,7 @@ import { releaseClaim } from '../services/kmExecState';
 export const kmReleaseClaimTool = {
   name: 'km_release_claim',
   description:
-    '释放认领：不带 failReason 记为 released，带 failReason 记为 failed；两种情况下 KM 节点都保持"待拆解"，可被重新认领。失败不会把节点标记为已完成',
+    '释放待拆解或待协同认领：不带 failReason 记为 released，带 failReason 记为 failed；两种情况下 KM 节点标签都保持不变，可被重新认领',
   inputSchema: {
     type: 'object',
     properties: {
@@ -16,7 +16,7 @@ export const kmReleaseClaimTool = {
       },
       claimId: {
         type: 'string',
-        description: 'km_claim_todos 返回的认领标识',
+        description: 'km_claim_todos 或 km_claim_collaboration_tasks 返回的认领标识',
       },
       nodeIds: {
         type: 'array',

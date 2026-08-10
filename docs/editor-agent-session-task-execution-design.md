@@ -1,9 +1,9 @@
 # InfiniteMap 编辑器智能体会话驱动任务执行设计
 
-> 状态：可实施设计稿  
-> 版本：v1.0  
-> 日期：2026-08-06  
-> 适用项目：`Workspace/openSource/InfiniteMap`  
+> 状态：可实施设计稿
+> 版本：v1.0
+> 日期：2026-08-06
+> 适用项目：`Workspace/openSource/InfiniteMap`
 > 规则基线：`Workspace/harnessRules/brainstorm-executer/requirement-instruction-breakdown-rules.md`
 
 ## 1. 结论
@@ -15,7 +15,7 @@ InfiniteMap 应新增一个由编辑器扩展宿主统一控制的“节点任�
 1. **编辑器扩展是唯一协调者**：负责读取最新 KM、认领任务、构造上下文、创建会话、续租、审核回执和最终回写。
 2. **智能体会话是执行者**：负责生成文件、运行验证或产出协同子节点文本；默认禁止智能体直接调用 KM 写工具，避免与编辑器重复回写。
 3. **所有 `.km` 读取和写入仍通过 InfiniteMap MCP**：扩展不得为了方便直接 `fs.readFile` / `fs.writeFile` 修改 KM。
-4. **待拆解使用租约，待协同使用最新版本 CAS**：完整继承现有 12 个 KM 工具及规则中的并发约束。
+4. **两类任务都支持租约**：待拆解使用叶子任务 claim；待协同使用协同 claim 和目标子树哈希。单写入者场景仍保留最新版本 CAS，完整继承现有 14 个 KM 工具及规则中的并发约束。
 5. **会话创建后立即建立节点追溯关系**：节点保存最近一次会话的最小引用；完整历史保存在 `<km>.sessions.json` 旁车中。
 6. **成功回写必须可审核**：会话结束不等于节点完成；只有输出、验证和 dry-run 均通过后，才允许实际完成或协同扩散。
 7. **Codex 使用官方 app-server**；Copilot 原生会话能力只在 Bridge 可用时启用，未提供 Bridge 时明确降级为 InfiniteMap 自有会话。
@@ -47,17 +47,17 @@ InfiniteMap 应新增一个由编辑器扩展宿主统一控制的“节点任�
 
 ## 3. 现状基线与可复用能力
 
-| 现有能力 | 实现位置 | 本方案复用方式 |
-| --- | --- | --- |
-| Custom Editor 文档和 Webview 生命周期 | `src/mindEditor.ts` | 在现有 Provider 内增加任务协调消息入口，不新建第二套编辑器 |
-| Webview 双向消息、握手、重连 | `webui/main.js` | 扩展版本化 `agentTask/v1` 协议，沿用 requestId 和显式结果确认 |
-| KM 12 个 MCP 工具 | `src/mcp/server.ts` | 作为编辑器协调器唯一 KM 读写通道 |
-| 文件 SHA-256 版本 | `kmFileReader.ts` | 待拆解使用 `kmRevision`，待协同使用 `fileRevision` |
-| 待拆解租约和节点哈希 | `kmExecState.ts` | 编辑器启动会话前认领，长任务续租，完成时校验快照 |
-| KM 文件锁和原子 rename | `kmExecState.ts` / `kmFileWriter.ts` | 会话引用、任务标签和协同子节点统一进入锁内写回 |
-| `<km>.exec.json` 执行旁车 | `kmExecState.ts` | 扩展活动会话、等待审核、冲突等执行观测字段 |
-| 节点卡执行状态 | `nodeCard` directive | 增加执行按钮、最近会话和历史入口 |
-| 外部写入自动刷新/冲突保护 | `mindEditor.ts` | MCP 写回前检查编辑器 dirty；干净时刷新，脏时阻止写回 |
+| 现有能力                              | 实现位置                                 | 本方案复用方式                                                 |
+| ------------------------------------- | ---------------------------------------- | -------------------------------------------------------------- |
+| Custom Editor 文档和 Webview 生命周期 | `src/mindEditor.ts`                    | 在现有 Provider 内增加任务协调消息入口，不新建第二套编辑器     |
+| Webview 双向消息、握手、重连          | `webui/main.js`                        | 扩展版本化`agentTask/v1` 协议，沿用 requestId 和显式结果确认 |
+| KM 14 个 MCP 工具                     | `src/mcp/server.ts`                    | 作为编辑器协调器唯一 KM 读写通道                               |
+| 文件 SHA-256 版本                     | `kmFileReader.ts`                      | 待拆解使用`kmRevision`，待协同使用 `fileRevision`          |
+| 待拆解租约和节点哈希                  | `kmExecState.ts`                       | 编辑器启动会话前认领，长任务续租，完成时校验快照               |
+| KM 文件锁和原子 rename                | `kmExecState.ts` / `kmFileWriter.ts` | 会话引用、任务标签和协同子节点统一进入锁内写回                 |
+| `<km>.exec.json` 执行旁车           | `kmExecState.ts`                       | 扩展活动会话、等待审核、冲突等执行观测字段                     |
+| 节点卡执行状态                        | `nodeCard` directive                   | 增加执行按钮、最近会话和历史入口                               |
+| 外部写入自动刷新/冲突保护             | `mindEditor.ts`                        | MCP 写回前检查编辑器 dirty；干净时刷新，脏时阻止写回           |
 
 现有 `KmNode.data` 类型只声明 `id`、`created`、`text`、`resource` 和 `expandState`。本设计需要增加可选的 `infiniteMap` 命名空间，但不得覆盖已有 `hyperlink`。用户原有超链接只能由用户编辑；智能体会话链接使用独立字段和节点卡按钮展示。
 
@@ -107,7 +107,7 @@ flowchart LR
     MP["MindEditorProvider<br/>消息适配与文档状态"]
     CO["KmTaskSessionCoordinator<br/>任务状态机与审核"]
     MCP["KmMcpClient<br/>stdio MCP client"]
-    KMS["InfiniteMap MCP Server<br/>12+ KM tools"]
+    KMS["InfiniteMap MCP Server<br/>14+ KM tools"]
     SA["SessionOrchestrator"]
     CA["CodexAppServerAdapter"]
     PA["CopilotAdapter / Bridge"]
@@ -129,12 +129,12 @@ flowchart LR
 
 ### 5.1 进程边界
 
-| 进程 | 允许职责 | 禁止职责 |
-| --- | --- | --- |
-| Webview | 展示、收集用户操作、获取当前选中节点 ID | 文件读写、启动进程、保存 Token、直接调用 Provider |
-| Extension Host | 状态机、MCP Client、Provider Adapter、Deep Link、文档 dirty 检查 | 绕过 MCP 直接修改 KM |
-| InfiniteMap MCP | KM 读取、校验、认领、续租、会话引用、完成和协同扩散 | 创建 Codex/Copilot 会话 |
-| Codex/Copilot 会话 | 执行任务、产生输出、返回结构化回执 | 默认不得修改 KM 标签或调用 KM 写工具 |
+| 进程               | 允许职责                                                         | 禁止职责                                          |
+| ------------------ | ---------------------------------------------------------------- | ------------------------------------------------- |
+| Webview            | 展示、收集用户操作、获取当前选中节点 ID                          | 文件读写、启动进程、保存 Token、直接调用 Provider |
+| Extension Host     | 状态机、MCP Client、Provider Adapter、Deep Link、文档 dirty 检查 | 绕过 MCP 直接修改 KM                              |
+| InfiniteMap MCP    | KM 读取、校验、认领、续租、会话引用、完成和协同扩散              | 创建 Codex/Copilot 会话                           |
+| Codex/Copilot 会话 | 执行任务、产生输出、返回结构化回执                               | 默认不得修改 KM 标签或调用 KM 写工具              |
 
 ### 5.2 模块规划
 
@@ -482,7 +482,7 @@ sequenceDiagram
 
 ## 10. 待协同节点执行流程
 
-待协同不使用待拆解 claim 工具，依赖最新 `fileRevision` 和锁内 CAS。单个编辑器窗口同时只允许一个针对同一节点的活动协同会话；跨窗口重复执行最终由版本冲突拒绝。
+待协同使用独立的 `km_claim_collaboration_tasks` 和 `km_complete_collaboration_claim`，续租、失败释放复用通用 claim 工具。完成校验使用认领时的目标完整子树哈希，因此其他协同节点先写回不会造成无关冲突；目标节点或已有子节点变化时旧结果必须被拒绝。
 
 ```mermaid
 sequenceDiagram
@@ -493,6 +493,7 @@ sequenceDiagram
 
     U->>C: 对待协同节点点击发起协同
     C->>M: km_validate + km_read + 两类 list
+    C->>M: km_claim_collaboration_tasks(nodeIds=[nodeId], expectedFileRevision)
     C->>M: km_get_collaboration_context(nodeId)
     M-->>C: root path + subtree + siblings + fileRevision
     C->>S: createSession(provider)
@@ -500,13 +501,16 @@ sequenceDiagram
     C->>M: km_record_session(dryRun, status=running, expectedRevision)
     C->>M: km_record_session(actual, status=running, expectedRevision)
     C->>S: submitTurn(context + collaboration receipt schema)
+    loop 长任务
+      C->>M: km_renew_claim(claimId, workerId)
+    end
     S-->>C: collaborationChildren[]
     C->>C: 去空、去重、禁止标签、检查已有子节点重复
     C->>M: 重新 list + km_get_collaboration_context
     C-->>U: 展示将生成的直接子节点
     U->>C: 确认扩散
-    C->>M: km_expand_collaboration(dryRun, latest fileRevision, executionId)
-    C->>M: km_expand_collaboration(actual, latest fileRevision, executionId)
+    C->>M: km_complete_collaboration_claim(dryRun, claimId, executionId)
+    C->>M: km_complete_collaboration_claim(actual, claimId, executionId)
     C->>M: km_validate + 两类 list
     C-->>U: completed + 打开会话/定位新节点
 ```
@@ -520,9 +524,9 @@ sequenceDiagram
 - 子节点之间不得重复；
 - 内容必须自包含、具体，不能只有“继续讨论”“后续优化”等占位语；
 - 展示根链路和必要同级上下文，让用户判断粒度是否一致；
-- 版本冲突时必须重新读取上下文并重新展示审核，不能沿用旧确认。
+- 目标子树哈希冲突时必须重新认领、读取上下文并重新展示审核，不能沿用旧确认。
 
-取消或失败时，先 dry-run、再实际调用 `km_record_session(status=failed|cancelled)` 更新最近会话和旁车，但节点继续保留 `待协同`。
+取消或失败时，先 dry-run、再实际调用 `km_record_session(status=failed|cancelled)` 更新最近会话和旁车，并调用 `km_release_claim`；节点继续保留 `待协同`。
 
 ## 11. 会话 Prompt 设计
 
@@ -616,19 +620,19 @@ interface SessionCapabilities {
 
 Codex 使用官方 `codex app-server` stdio JSONL 协议：
 
-| InfiniteMap 操作 | app-server 方法 |
-| --- | --- |
-| 创建 | `thread/start` |
-| 恢复 | `thread/resume` |
-| 提交任务 | `turn/start` |
-| 运行中补充 | `turn/steer` + `expectedTurnId` |
-| 查询单会话 | `thread/read` |
-| 查询列表 | `thread/list`，按 `cwd` 和 `sourceKinds` 过滤 |
-| 更新名称 | `thread/name/set` |
-| 更新 pin/git 元数据 | `thread/metadata/update` |
-| 中断 | `turn/interrupt` |
-| 归档 | `thread/archive` |
-| 事件 | `thread/status/changed`、`turn/*`、`item/*` |
+| InfiniteMap 操作    | app-server 方法                                     |
+| ------------------- | --------------------------------------------------- |
+| 创建                | `thread/start`                                    |
+| 恢复                | `thread/resume`                                   |
+| 提交任务            | `turn/start`                                      |
+| 运行中补充          | `turn/steer` + `expectedTurnId`                 |
+| 查询单会话          | `thread/read`                                     |
+| 查询列表            | `thread/list`，按 `cwd` 和 `sourceKinds` 过滤 |
+| 更新名称            | `thread/name/set`                                 |
+| 更新 pin/git 元数据 | `thread/metadata/update`                          |
+| 中断                | `turn/interrupt`                                  |
+| 归档                | `thread/archive`                                  |
+| 事件                | `thread/status/changed`、`turn/*`、`item/*`   |
 
 实施要求：
 
@@ -732,15 +736,15 @@ interface InfiniteMapSessionBridgeV1 {
 
 ### 13.3 扩展现有写工具
 
-| 工具 | 新增可选入参 | 原子行为 |
-| --- | --- | --- |
-| `km_complete_claim` | `executionId` | 校验 execution/claim 一致；节点变为已完成的同时把最近会话置 completed |
-| `km_release_claim` | `executionId`、终态摘要 | 释放/失败的同时更新节点最近会话，节点保留待拆解 |
-| `km_mark_done` | `executionId` | 父级汇总或单写入者完成时写入最近会话 |
-| `km_expand_collaboration` | `executionId` | 追加子节点、完成父节点、记录最近会话和 generatedNodeIds 同一 KM 写入 |
-| `km_get_node` | 无强制变更 | 返回 `data.infiniteMap`，供节点卡刷新最近会话 |
+| 工具                        | 新增可选入参              | 原子行为                                                              |
+| --------------------------- | ------------------------- | --------------------------------------------------------------------- |
+| `km_complete_claim`       | `executionId`           | 校验 execution/claim 一致；节点变为已完成的同时把最近会话置 completed |
+| `km_release_claim`        | `executionId`、终态摘要 | 释放/失败的同时更新节点最近会话，节点保留原待处理标签                 |
+| `km_mark_done`            | `executionId`           | 父级汇总或单写入者完成时写入最近会话                                  |
+| `km_expand_collaboration` / `km_complete_collaboration_claim` | `executionId` | 单写入者或租约模式下，追加子节点、完成父节点、记录会话和 generatedNodeIds 同一 KM 写入 |
+| `km_get_node`             | 无强制变更                | 返回`data.infiniteMap`，供节点卡刷新最近会话                        |
 
-所有新增写入仍遵循：文件锁内重读 → 校验 → 临时文件 → JSON 校验 → rename → 旁车同步。实施后 MCP 工具数由 12 增至 14，必须同步更新执行规则、三份规则地图和时间戳。
+所有新增写入仍遵循：文件锁内重读 → 校验 → 临时文件 → JSON 校验 → rename → 旁车同步。会话追溯工具实施后 MCP 工具数将在现有 14 个基础上增至 16 个，必须同步更新执行规则、三份规则地图和时间戳。
 
 ### 13.4 Extension Host 的 MCP Client
 
@@ -926,17 +930,17 @@ stateDiagram-v2
 
 ### 16.1 错误处理矩阵
 
-| 错误 | 节点标签 | 租约 | 会话记录 | 用户动作 |
-| --- | --- | --- | --- | --- |
-| Provider 未安装/未登录 | 不变 | 不创建 | 不创建或 starting→failed | 打开安装/登录入口 |
-| 会话创建失败 | 不变 | 待拆解已 claim 时立即 release | failed | 重试 |
-| 会话运行失败 | 不变 | release + failReason | failed，可打开 | 重试原会话或新建 |
-| 租约续租失败 | 不变 | 不强制覆盖 | conflict | 重新读取并重新认领 |
-| 协同 revision 冲突 | 不变 | 不适用 | conflict | 重新取上下文并审核 |
-| 回执无法解析 | 不变 | 保持续租直到审核超时 | awaitingReview | 人工审核/标失败 |
-| 文档 dirty | 不变 | 继续续租 | awaitingSave | 保存或取消回写 |
-| Extension Host 重启 | 不变 | 租约可能继续或过期 | disconnected | 恢复/重新认领 |
-| MCP 不可用 | 不变 | 不新建写入 | 保留现状 | MCP 诊断后重试 |
+| 错误                   | 节点标签 | 租约                          | 会话记录                  | 用户动作           |
+| ---------------------- | -------- | ----------------------------- | ------------------------- | ------------------ |
+| Provider 未安装/未登录 | 不变     | 不创建                        | 不创建或 starting→failed | 打开安装/登录入口  |
+| 会话创建失败           | 不变     | 待拆解已 claim 时立即 release | failed                    | 重试               |
+| 会话运行失败           | 不变     | release + failReason          | failed，可打开            | 重试原会话或新建   |
+| 租约续租失败           | 不变     | 不强制覆盖                    | conflict                  | 重新读取并重新认领 |
+| 协同 revision 冲突     | 不变     | 不适用                        | conflict                  | 重新取上下文并审核 |
+| 回执无法解析           | 不变     | 保持续租直到审核超时          | awaitingReview            | 人工审核/标失败    |
+| 文档 dirty             | 不变     | 继续续租                      | awaitingSave              | 保存或取消回写     |
+| Extension Host 重启    | 不变     | 租约可能继续或过期            | disconnected              | 恢复/重新认领      |
+| MCP 不可用             | 不变     | 不新建写入                    | 保留现状                  | MCP 诊断后重试     |
 
 ### 16.2 超时
 
@@ -992,16 +996,16 @@ KM 与两个旁车无法形成文件系统级多文件事务，采用“KM 为�
 
 建议新增：
 
-| 配置 | 默认值 | 说明 |
-| --- | --- | --- |
-| `infiniteMap.agentTasks.enabled` | `true` | 总开关 |
-| `infiniteMap.agentTasks.defaultProvider` | `codex` | 默认 Provider，能力不可用时不静默切换 |
-| `infiniteMap.agentTasks.autoWriteback` | `false` | 自动回写，需满足全部机器校验 |
-| `infiniteMap.agentTasks.reviewLeaseSeconds` | `600` | 待拆解租约/审核窗口 |
-| `infiniteMap.agentTasks.historyPageSize` | `20` | 历史页大小 |
-| `infiniteMap.agentTasks.persistFullResponse` | `false` | 默认不持久化正文 |
-| `infiniteMap.agentTasks.codexExecutable` | 自动发现 | 仅高级设置显示，不在主流程要求填写 |
-| `infiniteMap.agentTasks.experimentalCodexApi` | `false` | 是否启用实验 app-server 方法 |
+| 配置                                            | 默认值    | 说明                                  |
+| ----------------------------------------------- | --------- | ------------------------------------- |
+| `infiniteMap.agentTasks.enabled`              | `true`  | 总开关                                |
+| `infiniteMap.agentTasks.defaultProvider`      | `codex` | 默认 Provider，能力不可用时不静默切换 |
+| `infiniteMap.agentTasks.autoWriteback`        | `false` | 自动回写，需满足全部机器校验          |
+| `infiniteMap.agentTasks.reviewLeaseSeconds`   | `600`   | 待拆解租约/审核窗口                   |
+| `infiniteMap.agentTasks.historyPageSize`      | `20`    | 历史页大小                            |
+| `infiniteMap.agentTasks.persistFullResponse`  | `false` | 默认不持久化正文                      |
+| `infiniteMap.agentTasks.codexExecutable`      | 自动发现  | 仅高级设置显示，不在主流程要求填写    |
+| `infiniteMap.agentTasks.experimentalCodexApi` | `false` | 是否启用实验 app-server 方法          |
 
 不新增 Gateway URL、API Base、Token 输入框。
 
@@ -1166,16 +1170,16 @@ npm run build
 
 ## 23. 风险与取舍
 
-| 风险 | 等级 | 应对 |
-| --- | --- | --- |
-| Copilot 无原生会话公共 API | 高 | Bridge 才启用原生 CRUD；否则明确 InfiniteMap-managed |
-| Codex app-server 协议随版本变化 | 中 | 生成版本匹配 schema、能力探测、只用稳定 API |
-| 用户运行期间编辑 KM | 高 | 运行阶段旁车更新；回写前保存、重读、重新审核 |
-| 会话自然语言误报完成 | 高 | 强制结构化回执 + 产物/验证检查 + 人工确认 |
-| KM 与旁车非跨文件事务 | 中 | KM 原子写含最近会话；旁车可重建 |
-| 历史数据膨胀 | 中 | 节点只存最新；旁车分页并可配置保留策略 |
-| 多窗口重复协同 | 中 | 单窗口去重 + 最新 revision CAS；后续可增加协同租约 |
-| AngularJS 旧 UI 难复用新组件 | 中 | 使用隔离 directive/service 和统一 token 兼容层，不在 `main.js` 堆 UI |
+| 风险                            | 等级 | 应对                                                                  |
+| ------------------------------- | ---- | --------------------------------------------------------------------- |
+| Copilot 无原生会话公共 API      | 高   | Bridge 才启用原生 CRUD；否则明确 InfiniteMap-managed                  |
+| Codex app-server 协议随版本变化 | 中   | 生成版本匹配 schema、能力探测、只用稳定 API                           |
+| 用户运行期间编辑 KM             | 高   | 运行阶段旁车更新；回写前保存、重读、重新审核                          |
+| 会话自然语言误报完成            | 高   | 强制结构化回执 + 产物/验证检查 + 人工确认                             |
+| KM 与旁车非跨文件事务           | 中   | KM 原子写含最近会话；旁车可重建                                       |
+| 历史数据膨胀                    | 中   | 节点只存最新；旁车分页并可配置保留策略                                |
+| 多窗口重复协同                  | 中   | `km_claim_collaboration_tasks` 去重认领 + 目标子树哈希冲突保护         |
+| AngularJS 旧 UI 难复用新组件    | 中   | 使用隔离 directive/service 和统一 token 兼容层，不在`main.js` 堆 UI |
 
 ## 24. 推荐首个可交付切片
 

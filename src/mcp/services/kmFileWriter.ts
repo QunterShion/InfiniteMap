@@ -310,6 +310,14 @@ export function expandCollaborationTask(
     );
   }
 
+  const execState = readExecState(resolved);
+  const activeEntry = execState.tasks[nodeId];
+  if (isLeaseActive(activeEntry)) {
+    throw new Error(
+      `协同节点已被 ${activeEntry!.workerId} 认领且租约未过期，请由认领者通过 km_complete_collaboration_claim 完成，或先 km_release_claim 释放: ${nodeId}`
+    );
+  }
+
   const doc = readKmFile(resolved);
   const existingIds = new Set<string>();
   collectNodeIds(doc.root, existingIds);
@@ -357,7 +365,7 @@ export function expandCollaborationTask(
   if (!dryRun) {
     const content = JSON.stringify(doc, null, 4);
     safeWriteFile(resolved, content);
-    syncExecStateAfterWrite(resolved, [], 'legacy');
+    syncExecStateAfterWrite(resolved, [nodeId], 'legacy');
     revisionAfter = getKmFileRevision(resolved);
 
     const verifyDoc = readKmFile(resolved);

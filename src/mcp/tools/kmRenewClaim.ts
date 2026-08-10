@@ -16,7 +16,7 @@ export const kmRenewClaimTool = {
       },
       claimId: {
         type: 'string',
-        description: 'km_claim_todos 返回的认领标识',
+        description: 'km_claim_todos 或 km_claim_collaboration_tasks 返回的认领标识',
       },
       workerId: {
         type: 'string',

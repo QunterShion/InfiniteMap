@@ -27,18 +27,31 @@ export const kmCompleteClaimTool = {
         type: 'boolean',
         description: '是否为试运行模式（只校验不写入），默认 false',
       },
+      executionId: {
+        type: 'string',
+        description: '可选，已通过 km_record_session 绑定的 executionId；提供时原子更新会话为 completed',
+      },
+      summary: { type: 'string', maxLength: 4096 },
     },
     required: ['filePath', 'claimId'],
   },
 };
 
-export function handleKmCompleteClaim(args: {
+export async function handleKmCompleteClaim(args: {
   filePath: string;
   claimId: string;
   nodeIds?: string[];
   dryRun?: boolean;
+  executionId?: string;
+  summary?: string;
 }) {
-  const result = completeClaim(args.filePath, args.claimId, args.nodeIds, args.dryRun ?? false);
+  const result = await completeClaim(
+    args.filePath,
+    args.claimId,
+    args.nodeIds,
+    args.dryRun ?? false,
+    args.executionId ? { executionId: args.executionId, summary: args.summary } : undefined
+  );
   return {
     content: [
       {

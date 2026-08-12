@@ -27,20 +27,32 @@ export const kmReleaseClaimTool = {
         type: 'string',
         description: '可选，失败原因；提供时任务状态记为 failed 以便审计',
       },
+      executionId: {
+        type: 'string',
+        description: '可选，已绑定的 executionId；提供时把节点最近会话原子更新为 failed/cancelled',
+      },
+      dryRun: {
+        type: 'boolean',
+        description: '只校验释放与会话终态，不写文件',
+      },
     },
     required: ['filePath', 'claimId'],
   },
 };
 
-export function handleKmReleaseClaim(args: {
+export async function handleKmReleaseClaim(args: {
   filePath: string;
   claimId: string;
   nodeIds?: string[];
   failReason?: string;
+  executionId?: string;
+  dryRun?: boolean;
 }) {
-  const result = releaseClaim(args.filePath, args.claimId, {
+  const result = await releaseClaim(args.filePath, args.claimId, {
     nodeIds: args.nodeIds,
     failReason: args.failReason,
+    dryRun: args.dryRun,
+    sessionUpdate: args.executionId ? { executionId: args.executionId } : undefined,
   });
   return {
     content: [

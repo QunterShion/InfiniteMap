@@ -1,0 +1,456 @@
+.minder-editor-container {
+	color-scheme: light dark;
+	container-type: inline-size;
+	--spacing: ~"calc(1em / 4)";
+	--background-base: var(--vscode-editor-background, Canvas);
+	--background-weak: var(--vscode-sideBar-background, Canvas);
+	--background-strong: var(--vscode-editorWidget-background, Canvas);
+	--surface-raised-base: var(--vscode-toolbar-hoverBackground, ButtonFace);
+	--surface-raised-stronger-non-alpha: var(--vscode-editorWidget-background, Canvas);
+	--surface-base-hover: var(--vscode-list-hoverBackground, ButtonFace);
+	--surface-base-active: var(--vscode-list-activeSelectionBackground, Highlight);
+	--text-strong: var(--vscode-editorWidget-foreground, CanvasText);
+	--text-base: var(--vscode-foreground, CanvasText);
+	--text-weak: var(--vscode-descriptionForeground, GrayText);
+	--icon-strong-base: var(--vscode-icon-foreground, CanvasText);
+	--icon-base: var(--vscode-descriptionForeground, GrayText);
+	--icon-invert-base: var(--vscode-button-foreground, ButtonText);
+	--surface-critical-weak: var(--vscode-inputValidation-errorBackground, Canvas);
+	--icon-success-base: var(--vscode-testing-iconPassed, CanvasText);
+	--icon-warning-base: var(--vscode-notificationsWarningIcon-foreground, CanvasText);
+	--icon-critical-base: var(--vscode-testing-iconFailed, MarkText);
+	--border-weak-base: var(--vscode-editorWidget-border, GrayText);
+	--border-selected: var(--vscode-focusBorder, Highlight);
+	--border-critical-selected: var(--vscode-inputValidation-errorBorder, Mark);
+	--text-critical-base: var(--vscode-errorForeground, MarkText);
+	--surface-interactive-base: var(--vscode-button-background, ButtonFace);
+	--surface-interactive-hover: var(--vscode-button-hoverBackground, Highlight);
+	--font-size-small: var(--vscode-font-size, medium);
+	--font-size-base: var(--vscode-font-size, medium);
+	--font-family-sans: var(--vscode-font-family, system-ui);
+	--font-family-mono: var(--vscode-editor-font-family, monospace);
+	--radius-sm: var(--vscode-cornerRadius, var(--spacing));
+	--radius-md: var(--vscode-cornerRadius, ~"calc(var(--spacing) * 1.5)");
+	--radius-lg: var(--vscode-cornerRadius, ~"calc(var(--spacing) * 2)");
+	--shadow-xs-border-base: 0 0 0 thin var(--border-weak-base);
+	--shadow-xs-border-focus: 0 0 0 ~"calc(var(--spacing) / 2)" var(--border-selected);
+	--shadow-md: 0 var(--spacing) ~"calc(var(--spacing) * 4)" var(--vscode-widget-shadow, transparent);
+	--duration-open: 150ms;
+}
+
+@media (prefers-color-scheme: dark) {
+	.minder-editor-container { color-scheme: dark; }
+}
+
+[data-component="agent-control-bar"] {
+	position: absolute;
+	left: 50%;
+	bottom: ~"calc(var(--spacing) * 3)";
+	transform: translateX(-50%);
+	z-index: 3;
+	display: flex;
+	align-items: flex-end;
+	gap: ~"calc(var(--spacing) * 2)";
+	box-sizing: border-box;
+	width: ~"min(72vw, 96ch)";
+	padding: ~"calc(var(--spacing) * 2)";
+	color: var(--text-base);
+	background: var(--surface-raised-stronger-non-alpha);
+	border: thin solid var(--border-weak-base);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-md);
+	font-family: var(--font-family-sans);
+	font-size: var(--font-size-base);
+
+	[data-slot~="field"],
+	[data-slot="effort-default"] {
+		display: flex;
+		flex: 0 1 18ch;
+		min-width: 0;
+		flex-direction: column;
+		gap: var(--spacing);
+	}
+
+	[data-slot~="instruction-field"] {
+		flex: 1 1 28ch;
+	}
+
+	[data-slot="field-label"] {
+		color: var(--text-weak);
+		font-size: var(--font-size-small);
+		font-weight: 500;
+		line-height: 130%;
+	}
+
+	[data-slot~="select"],
+	[data-slot~="input"],
+	[data-slot="readonly-value"] {
+		box-sizing: border-box;
+		min-width: 0;
+		height: ~"calc(var(--spacing) * 8)";
+		padding: ~"calc(var(--spacing) / 2)" ~"calc(var(--spacing) * 3)";
+		color: var(--text-strong);
+		background: var(--background-strong);
+		border: thin solid var(--border-weak-base);
+		border-radius: var(--radius-md);
+		font: inherit;
+	}
+
+	[data-slot~="select"]:focus-visible,
+	[data-slot~="input"]:focus-visible,
+	[data-slot~="button"]:focus-visible {
+		outline: none;
+		box-shadow: var(--shadow-xs-border-focus);
+	}
+
+	[data-slot="readonly-value"] {
+		display: flex;
+		align-items: center;
+		color: var(--text-weak);
+	}
+
+	[data-slot="actions"] {
+		display: flex;
+		flex: none;
+		gap: var(--spacing);
+	}
+
+	[data-slot="mcp-connection"] {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing);
+		height: ~"calc(var(--spacing) * 8)";
+		padding: 0 ~"calc(var(--spacing) * 2)";
+		color: var(--text-weak);
+		background: var(--background-weak);
+		border: thin solid var(--border-weak-base);
+		border-radius: var(--radius-md);
+		white-space: nowrap;
+	}
+
+	[data-slot="mcp-status-indicator"] {
+		flex: none;
+		width: ~"calc(var(--spacing) * 2)";
+		height: ~"calc(var(--spacing) * 2)";
+		background: var(--icon-warning-base);
+		border-radius: 50%;
+	}
+
+	[data-slot="mcp-connection"][data-state="ready"] [data-slot="mcp-status-indicator"] {
+		background: var(--icon-success-base);
+	}
+
+	[data-slot="mcp-connection"][data-state="unavailable"] [data-slot="mcp-status-indicator"] {
+		background: var(--icon-critical-base);
+	}
+
+	[data-slot="mcp-connection"] [data-slot="reconnect-mcp-button"] {
+		height: ~"calc(var(--spacing) * 6)";
+		padding: 0 ~"calc(var(--spacing) * 2)";
+	}
+
+	[data-slot~="button"] {
+		height: ~"calc(var(--spacing) * 8)";
+		padding: var(--spacing) ~"calc(var(--spacing) * 2)";
+		color: var(--text-base);
+		background: var(--surface-raised-base);
+		border: thin solid var(--border-weak-base);
+		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-xs-border-base);
+		font: inherit;
+		white-space: nowrap;
+		cursor: pointer;
+	}
+
+	[data-slot="send-button"] {
+		color: var(--icon-invert-base);
+		background: var(--surface-interactive-base);
+	}
+
+	// Loading 状态样式
+	[data-slot~="button"].button-loading {
+		position: relative;
+		color: var(--text-weak);
+		pointer-events: none;
+	}
+
+	[data-slot="spinner"] {
+		display: inline-block;
+		animation: spin 1s linear infinite;
+		font-style: normal;
+	}
+
+	@keyframes spin {
+		from { transform: rotate(0deg); }
+		to { transform: rotate(360deg); }
+	}
+
+	[data-slot~="button"]:hover:not(:disabled) { background: var(--surface-base-hover); }
+	[data-slot="send-button"]:hover:not(:disabled) { background: var(--surface-interactive-hover); }
+	[data-slot~="button"]:disabled,
+	[data-slot~="select"]:disabled,
+	[data-slot~="input"]:disabled {
+		color: var(--text-weak);
+		cursor: not-allowed;
+		opacity: .65;
+	}
+
+	[data-slot="status"] {
+		position: absolute;
+		left: 50%;
+		bottom: ~"calc(100% + var(--spacing))";
+		transform: translateX(-50%);
+		display: flex;
+		align-items: center;
+		gap: ~"calc(var(--spacing) * 2)";
+		max-width: ~"calc(100% - var(--spacing) * 4)";
+		padding: ~"calc(var(--spacing) * 2)" ~"calc(var(--spacing) * 3)";
+		color: var(--text-critical-base);
+		background: var(--surface-critical-weak);
+		border: thin solid var(--border-critical-selected);
+		border-radius: var(--radius-md);
+		line-height: 150%;
+		animation: agent-session-pop-in var(--duration-open) ease-out;
+	}
+
+	[data-slot="status"].status-warning {
+		color: var(--icon-warning-base);
+		background: var(--background-weak);
+		border-color: var(--icon-warning-base);
+	}
+
+	[data-slot="status"].status-error {
+		color: var(--text-critical-base);
+		background: var(--surface-critical-weak);
+		border-color: var(--border-critical-selected);
+	}
+
+	[data-slot="dismiss-error"] {
+		flex: none;
+		padding: 0;
+		width: ~"calc(var(--spacing) * 5)";
+		height: ~"calc(var(--spacing) * 5)";
+		color: inherit;
+		background: transparent;
+		border: none;
+		border-radius: var(--radius-sm);
+		font-size: ~"calc(var(--font-size-base) * 1.5)";
+		line-height: 1;
+		cursor: pointer;
+		opacity: 0.7;
+	}
+
+	[data-slot="dismiss-error"]:hover {
+		background: var(--surface-base-hover);
+		opacity: 1;
+	}
+}
+
+[data-component="provider-install-popover"],
+[data-component="provider-install-progress"],
+[data-component="provider-auth-popover"],
+[data-component="agent-input-dialog"] {
+	position: absolute;
+	left: 0;
+	bottom: ~"calc(100% + var(--spacing))";
+	min-width: 24ch;
+	padding: ~"calc(var(--spacing) * 3)";
+	color: var(--text-base);
+	background: var(--surface-raised-stronger-non-alpha);
+	border: thin solid var(--border-weak-base);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-md);
+	animation: agent-session-pop-in var(--duration-open) ease-out;
+
+	[data-slot="popover-title"] { color: var(--text-strong); font-weight: 500; }
+	[data-slot="popover-description"] { margin-top: ~"calc(var(--spacing) * 2)"; color: var(--text-weak); }
+	[data-slot="install-progress"] {
+		display: block;
+		width: 100%;
+		height: var(--spacing);
+		margin-top: ~"calc(var(--spacing) * 3)";
+		overflow: hidden;
+		background: var(--surface-raised-base);
+		border-radius: var(--radius-sm);
+	}
+	[data-slot="install-progress-value"] {
+		display: block;
+		width: 33.333%;
+		height: 100%;
+		background: var(--border-selected);
+	}
+	[data-slot="install-progress"][data-phase="waiting"] [data-slot="install-progress-value"] { width: 66.666%; }
+	[data-slot="install-progress"][data-phase="verifying"] [data-slot="install-progress-value"] { width: 100%; }
+	[data-slot="install-status"] {
+		display: flex;
+		align-items: center;
+		gap: ~"calc(var(--spacing) * 2)";
+		margin-top: ~"calc(var(--spacing) * 3)";
+		color: var(--text-base);
+	}
+	[data-slot="install-status-indicator"] {
+		flex: none;
+		width: ~"calc(var(--spacing) * 2)";
+		height: ~"calc(var(--spacing) * 2)";
+		background: var(--icon-warning-base);
+		border-radius: 50%;
+	}
+	&[data-state="completed"] [data-slot="install-status-indicator"] { background: var(--icon-success-base); }
+	&[data-state="failed"] [data-slot="install-status-indicator"] { background: var(--icon-critical-base); }
+	[data-slot="install-error"] {
+		max-width: 44ch;
+		margin-top: ~"calc(var(--spacing) * 2)";
+		color: var(--text-critical-base);
+		line-height: 150%;
+		overflow-wrap: anywhere;
+	}
+	[data-slot="approval-input-field"] { display: flex; flex-direction: column; gap: var(--spacing); margin-top: ~"calc(var(--spacing) * 2)"; }
+	[data-slot="approval-input"] { width: 100%; }
+	[data-slot="popover-actions"] { display: flex; gap: var(--spacing); margin-top: ~"calc(var(--spacing) * 3)"; }
+}
+
+[data-component="agent-session-history"] {
+	position: absolute;
+	top: ~"calc(var(--spacing) * 3)";
+	right: ~"calc(var(--spacing) * 3)";
+	bottom: ~"calc(var(--spacing) * 28)";
+	z-index: 4;
+	box-sizing: border-box;
+	width: ~"min(42ch, calc(100vw - var(--spacing) * 6))";
+	overflow: auto;
+	padding: ~"calc(var(--spacing) * 3)";
+	color: var(--text-base);
+	background: var(--surface-raised-stronger-non-alpha);
+	border: thin solid var(--border-weak-base);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-md);
+	font-family: var(--font-family-sans);
+	font-size: var(--font-size-base);
+
+	[data-slot="history-header"] { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: ~"calc(var(--spacing) * 2)"; border-bottom: thin solid var(--border-weak-base); }
+	[data-slot="history-title"] { color: var(--text-strong); font-weight: 500; }
+	[data-slot="history-meta"],
+	[data-slot="history-config"] { color: var(--text-weak); }
+	[data-slot="notice"],
+	[data-slot="error"],
+	[data-slot="empty"] { padding: ~"calc(var(--spacing) * 2)" 0; }
+	[data-slot="error"],
+	[data-slot="history-error"] { color: var(--text-critical-base); }
+	[data-slot="history-list"],
+	[data-slot="artifact-list"] { margin: 0; padding: 0; list-style: none; }
+	[data-slot="history-item"] { padding: ~"calc(var(--spacing) * 3)" 0; border-bottom: thin solid var(--border-weak-base); }
+	[data-slot="history-link"] { color: var(--vscode-textLink-foreground, LinkText); }
+	[data-slot="config-comparison"] { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--spacing) ~"calc(var(--spacing) * 2)"; margin: ~"calc(var(--spacing) * 2)" 0; }
+	[data-slot="config-comparison"] dt { color: var(--text-weak); font-weight: 500; }
+	[data-slot="config-comparison"] dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	[data-slot="history-summary"],
+	[data-slot="artifact-section"] { margin-top: ~"calc(var(--spacing) * 2)"; }
+	[data-slot="artifact-title"] { color: var(--text-strong); font-weight: 500; }
+	[data-slot="copy-button"],
+	[data-slot="load-more-button"] { margin-top: ~"calc(var(--spacing) * 2)"; }
+	[data-slot~="button"] {
+		padding: var(--spacing) ~"calc(var(--spacing) * 2)";
+		color: var(--text-base);
+		background: var(--surface-raised-base);
+		border: thin solid var(--border-weak-base);
+		border-radius: var(--radius-md);
+		font: inherit;
+		cursor: pointer;
+	}
+	[data-slot~="button"]:hover { background: var(--surface-base-hover); }
+	[data-slot~="button"]:focus-visible { outline: none; box-shadow: var(--shadow-xs-border-focus); }
+}
+
+[data-component="agent-activity-overview"] {
+	position: absolute;
+	top: ~"calc(var(--spacing) * 3)";
+	left: ~"calc(var(--spacing) * 3)";
+	bottom: ~"calc(var(--spacing) * 28)";
+	z-index: 4;
+	box-sizing: border-box;
+	width: ~"min(42ch, calc(100vw - var(--spacing) * 6))";
+	overflow: auto;
+	padding: ~"calc(var(--spacing) * 3)";
+	color: var(--text-base);
+	background: var(--surface-raised-stronger-non-alpha);
+	border: thin solid var(--border-weak-base);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-md);
+	font-family: var(--font-family-sans);
+	font-size: var(--font-size-base);
+
+	[data-slot="activity-header"] {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		padding-bottom: ~"calc(var(--spacing) * 2)";
+		border-bottom: thin solid var(--border-weak-base);
+	}
+	[data-slot="activity-title"],
+	[data-slot="activity-node"] { color: var(--text-strong); font-weight: 500; }
+	[data-slot="activity-meta"],
+	[data-slot="activity-detail"] { color: var(--text-weak); }
+	[data-slot="notice"],
+	[data-slot="error"],
+	[data-slot="empty"] { padding: ~"calc(var(--spacing) * 2)" 0; }
+	[data-slot="error"] { color: var(--text-critical-base); }
+	[data-slot="activity-list"] { margin: 0; padding: 0; list-style: none; }
+	[data-slot="activity-item"] {
+		padding: ~"calc(var(--spacing) * 3)" 0;
+		border-bottom: thin solid var(--border-weak-base);
+	}
+	[data-slot="activity-link"] {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: ~"calc(var(--spacing) * 2)";
+		width: 100%;
+		padding: var(--spacing) 0;
+		color: var(--text-base);
+		background: transparent;
+		border: 0;
+		font: inherit;
+		text-align: start;
+		cursor: pointer;
+	}
+	[data-slot="activity-link"]:hover { background: var(--surface-base-hover); }
+	[data-slot="activity-link"]:focus-visible,
+	[data-slot~="button"]:focus-visible { outline: none; box-shadow: var(--shadow-xs-border-focus); }
+	[data-slot="activity-state"] { color: var(--text-weak); white-space: nowrap; }
+	[data-slot~="button"] {
+		padding: var(--spacing) ~"calc(var(--spacing) * 2)";
+		color: var(--text-base);
+		background: var(--surface-raised-base);
+		border: thin solid var(--border-weak-base);
+		border-radius: var(--radius-md);
+		font: inherit;
+		cursor: pointer;
+	}
+}
+
+@container (max-width: 100ch) {
+	[data-component="agent-control-bar"] {
+		flex-wrap: wrap;
+		width: ~"calc(100% - var(--spacing) * 6)";
+		bottom: ~"calc(var(--spacing) * 80)";
+	}
+	[data-component="agent-control-bar"] [data-slot="actions"] {
+		width: 100%;
+		justify-content: flex-end;
+	}
+	[data-component="agent-control-bar"] [data-slot~="effort-field"],
+	[data-component="agent-control-bar"] [data-slot="effort-default"] { display: none; }
+	[data-component="agent-session-history"],
+	[data-component="agent-activity-overview"],
+	.node-card { bottom: ~"calc(var(--spacing) * 108)"; }
+}
+
+@container (max-width: 54ch) {
+	[data-component="agent-control-bar"] [data-slot~="model-field"] { display: none; }
+	[data-component="agent-control-bar"] [data-slot="field-label"] { position: absolute; overflow: hidden; width: 0; height: 0; }
+}
+
+@keyframes agent-session-pop-in {
+	from { opacity: 0; transform: scale(.96); }
+	to { opacity: 1; transform: scale(1); }
+}

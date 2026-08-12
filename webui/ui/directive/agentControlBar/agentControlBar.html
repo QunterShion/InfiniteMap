@@ -1,0 +1,150 @@
+<section data-component="agent-control-bar"
+         ng-class="{'is-busy': agentControl.busy, 'has-error': agentControl.error}"
+         aria-label="{{ 'instruction' | agentSessionText }}">
+    <label data-slot="field provider-field">
+        <span data-slot="field-label">{{ 'provider' | agentSessionText }}</span>
+        <select data-slot="select provider-select"
+                ng-model="agentControl.providerId"
+                ng-change="providerChanged()"
+                ng-disabled="agentControl.busy || isProviderInstalling() || agentControl.session.activeTurnId"
+                aria-label="{{ 'provider' | agentSessionText }}">
+            <option ng-repeat="provider in agentControl.providers track by provider.id" value="{{ provider.id }}">
+                {{ providerOptionLabel(provider) }}
+            </option>
+        </select>
+    </label>
+    <label data-slot="field model-field" ng-if="agentControl.models.length">
+        <span data-slot="field-label">{{ 'model' | agentSessionText }}</span>
+        <select data-slot="select model-select"
+                ng-model="agentControl.modelId"
+                ng-change="modelChanged()"
+                ng-disabled="agentControl.busy || agentControl.session.activeTurnId"
+                aria-label="{{ 'model' | agentSessionText }}">
+            <option ng-repeat="model in agentControl.models track by model.id" value="{{ model.id }}">{{ model.label }}</option>
+        </select>
+    </label>
+    <label data-slot="field effort-field" ng-if="agentControl.efforts.length > 1">
+        <span data-slot="field-label">{{ 'effort' | agentSessionText }}</span>
+        <select data-slot="select effort-select"
+                ng-model="agentControl.effort"
+                ng-disabled="agentControl.busy || agentControl.session.activeTurnId"
+                aria-label="{{ 'effort' | agentSessionText }}">
+            <option ng-repeat="effort in agentControl.efforts track by effort.id" value="{{ effort.id }}">{{ effort.label }}</option>
+        </select>
+    </label>
+    <div data-slot="effort-default" ng-if="agentControl.efforts.length === 1">
+        <span data-slot="field-label">{{ 'effort' | agentSessionText }}</span>
+        <span data-slot="readonly-value">{{ 'defaultEffort' | agentSessionText }}</span>
+    </div>
+    <label data-slot="field instruction-field">
+        <span data-slot="field-label">{{ 'instruction' | agentSessionText }}</span>
+        <input data-slot="input instruction-input"
+               type="text"
+               ng-model="agentControl.input"
+               ng-disabled="agentControl.busy"
+               placeholder="{{ 'instructionPlaceholder' | agentSessionText }}"
+               aria-label="{{ 'instruction' | agentSessionText }}">
+    </label>
+	    <div data-slot="actions">
+			<div data-slot="mcp-connection" data-state="{{ agentControl.mcpConnection.state }}"
+				role="status" aria-live="polite">
+				<span data-slot="mcp-status-indicator" aria-hidden="true"></span>
+				<span data-slot="mcp-status-label">{{ mcpConnectionLabel() }}</span>
+				<button data-slot="button reconnect-mcp-button" type="button"
+					ng-if="agentControl.mcpConnection.state !== 'ready'"
+					ng-disabled="agentControl.mcpConnection.busy"
+					ng-click="reconnectMcp()">{{ 'reconnectMcp' | agentSessionText }}</button>
+			</div>
+			<button data-slot="button provider-install-button" type="button"
+			ng-if="selectedProviderNeedsInstall()" ng-click="requestSelectedProviderInstall()">
+			{{ 'install' | agentSessionText }}
+		</button>
+		<button data-slot="button activity-button" type="button" ng-click="openAgentActivity()">
+			{{ 'activity' | agentSessionText }}
+		</button>
+        <button data-slot="button send-button" type="button"
+                ng-click="sendAgentSession()"
+                ng-disabled="!canSendAgentSession()"
+                ng-class="{'button-loading': agentControl.busy && !agentControl.session.activeTurnId}">
+            <span ng-if="!(agentControl.busy && !agentControl.session.activeTurnId)">{{ 'send' | agentSessionText }}</span>
+            <span ng-if="agentControl.busy && !agentControl.session.activeTurnId">
+                <span data-slot="spinner" aria-hidden="true">⟳</span>
+                {{ 'sending' | agentSessionText }}
+            </span>
+        </button>
+        <button data-slot="button append-button" type="button" ng-click="appendAgentSession()" ng-disabled="!canAppendAgentSession()">
+            {{ 'append' | agentSessionText }}
+        </button>
+        <button data-slot="button interrupt-button" type="button" ng-click="interruptAgentSession()" ng-disabled="!canInterruptAgentSession()">
+            {{ 'interrupt' | agentSessionText }}
+        </button>
+    </div>
+    <div data-slot="status" role="status" aria-live="polite"
+         ng-if="agentControl.error || agentControl.document.dirty || agentControl.document.conflict"
+         ng-class="{'status-error': agentControl.error, 'status-warning': !agentControl.error}">
+        <strong ng-if="agentControl.error">{{ 'error' | agentSessionText }}:</strong>
+        {{ agentControl.error || ('dirty' | agentSessionText) }}
+        <button data-slot="button dismiss-error" type="button"
+                ng-if="agentControl.error"
+                ng-click="agentControl.error = null"
+                aria-label="{{ 'dismiss' | agentSessionText }}">×</button>
+    </div>
+    <div data-component="provider-install-popover" data-slot="popover" ng-if="agentControl.installCandidate">
+        <div data-slot="popover-title">{{ 'installTitle' | agentSessionText }} · {{ agentControl.installCandidate.displayName }}</div>
+        <div data-slot="popover-actions">
+            <button data-slot="button install-button" type="button" ng-click="confirmProviderInstall()">{{ 'install' | agentSessionText }}</button>
+            <button data-slot="button cancel-button" type="button" ng-click="cancelProviderInstall()">{{ 'cancel' | agentSessionText }}</button>
+        </div>
+    </div>
+	<div data-component="provider-install-progress" data-slot="popover"
+		ng-if="agentControl.installation"
+		data-state="{{ agentControl.installation.phase }}">
+		<div data-slot="popover-title">
+			{{ 'installTitle' | agentSessionText }} · {{ agentControl.installation.provider.displayName }}
+		</div>
+		<div data-slot="install-progress" role="progressbar" aria-valuemin="1" aria-valuemax="3"
+			aria-valuenow="{{ providerInstallProgressValue() }}" aria-label="{{ providerInstallStatusLabel() }}"
+			data-phase="{{ agentControl.installation.phase }}" ng-if="isProviderInstalling()">
+			<span data-slot="install-progress-value" aria-hidden="true"></span>
+		</div>
+		<div data-slot="install-status" role="status" aria-live="polite">
+			<span data-slot="install-status-indicator" aria-hidden="true"></span>
+			<span data-slot="install-status-label">{{ providerInstallStatusLabel() }}</span>
+		</div>
+		<div data-slot="install-error" ng-if="agentControl.installation.error">
+			{{ agentControl.installation.error }}
+		</div>
+		<div data-slot="popover-actions" ng-if="!isProviderInstalling()">
+			<button data-slot="button retry-install-button" type="button"
+				ng-if="agentControl.installation.phase === 'failed'"
+				ng-click="retryProviderInstall()">{{ 'retry' | agentSessionText }}</button>
+			<button data-slot="button close-install-button" type="button"
+				ng-click="closeProviderInstallation()">{{ 'close' | agentSessionText }}</button>
+		</div>
+	</div>
+	<div data-component="provider-auth-popover" data-slot="popover" ng-if="agentControl.authCandidate">
+		<div data-slot="popover-title">{{ 'signIn' | agentSessionText }} · {{ agentControl.authCandidate.displayName }}</div>
+		<div data-slot="popover-actions">
+			<button data-slot="button sign-in-button" type="button" ng-click="confirmProviderAuth()">{{ 'signIn' | agentSessionText }}</button>
+			<button data-slot="button cancel-button" type="button" ng-click="cancelProviderAuth()">{{ 'cancel' | agentSessionText }}</button>
+		</div>
+	</div>
+	<div data-component="agent-input-dialog" data-slot="popover" role="dialog" aria-modal="true"
+		aria-label="{{ 'approvalTitle' | agentSessionText }}" ng-if="agentControl.inputRequest">
+		<div data-slot="popover-title">{{ agentControl.inputRequest.title || ('approvalTitle' | agentSessionText) }}</div>
+		<div data-slot="popover-description" ng-if="agentControl.inputRequest.description">
+			{{ agentControl.inputRequest.description }}
+		</div>
+		<label data-slot="approval-input-field" ng-if="agentControl.inputRequest.kind === 'question'">
+			<span data-slot="field-label">{{ 'response' | agentSessionText }}</span>
+			<input data-slot="input approval-input" type="text" ng-model="agentControl.inputRequest.value"
+				ng-disabled="agentControl.inputRequest.resolving" aria-label="{{ 'response' | agentSessionText }}">
+		</label>
+		<div data-slot="popover-actions">
+			<button data-slot="button approve-button" type="button" ng-click="resolveAgentInput('approve')"
+				ng-disabled="agentControl.inputRequest.resolving">{{ 'allow' | agentSessionText }}</button>
+			<button data-slot="button deny-button" type="button" ng-click="resolveAgentInput('deny')"
+				ng-disabled="agentControl.inputRequest.resolving">{{ 'deny' | agentSessionText }}</button>
+		</div>
+	</div>
+</section>

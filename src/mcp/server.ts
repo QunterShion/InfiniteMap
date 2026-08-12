@@ -37,6 +37,8 @@ import {
   kmCompleteCollaborationClaimTool,
   handleKmCompleteCollaborationClaim,
 } from './tools/kmCompleteCollaborationClaim';
+import { kmRecordSessionTool, handleKmRecordSession } from './tools/kmRecordSession';
+import { kmListNodeSessionsTool, handleKmListNodeSessions } from './tools/kmListNodeSessions';
 
 /** 工具清单 */
 const tools: Tool[] = [
@@ -90,6 +92,11 @@ const tools: Tool[] = [
           type: 'boolean',
           description: '是否为试运行模式（不实际写入文件），默认 false',
         },
+        executionId: {
+          type: 'string',
+          description: '可选，已通过 km_record_session 绑定的 executionId；提供时原子写入 completed 会话终态',
+        },
+        summary: { type: 'string', maxLength: 4096 },
         expectedRevision: {
           type: 'string',
           description: '可选，由 km_list_todos 返回的文件版本 kmRevision；传入时若文件已被并发修改则拒绝写入',
@@ -160,6 +167,11 @@ const tools: Tool[] = [
           type: 'boolean',
           description: '是否为试运行模式（不实际写入文件），默认 false',
         },
+        executionId: {
+          type: 'string',
+          description: '可选，已通过 km_record_session 绑定的 executionId；提供时原子写入会话终态和 generatedNodeIds',
+        },
+        summary: { type: 'string', maxLength: 4096 },
       },
       required: ['filePath', 'nodeId', 'expectedRevision', 'childTexts'],
     },
@@ -170,6 +182,8 @@ const tools: Tool[] = [
   kmReleaseClaimTool as Tool,
   kmClaimCollaborationTasksTool as Tool,
   kmCompleteCollaborationClaimTool as Tool,
+  kmRecordSessionTool as Tool,
+  kmListNodeSessionsTool as Tool,
 ];
 
 const toolHandlers: Record<string, (args: any) => any> = {
@@ -185,6 +199,8 @@ const toolHandlers: Record<string, (args: any) => any> = {
   km_release_claim: handleKmReleaseClaim,
   km_claim_collaboration_tasks: handleKmClaimCollaborationTasks,
   km_complete_collaboration_claim: handleKmCompleteCollaborationClaim,
+  km_record_session: handleKmRecordSession,
+  km_list_node_sessions: handleKmListNodeSessions,
   km_get_collaboration_context: handleKmGetCollaborationContext,
   km_expand_collaboration: handleKmExpandCollaboration,
 };

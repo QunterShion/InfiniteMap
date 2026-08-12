@@ -66,6 +66,7 @@ function createRuntime(root, selected) {
   const window = {
     addEventListener(name, handler) { messages.push([name, handler]); },
     clearTimeout() { timeoutHandler = undefined; },
+	infiniteMapProtocolVersion: 1,
     infiniteMapWebviewSessionId: 'session',
     setTimeout(handler) { timeoutHandler = handler; return 1; },
     vscode: { postMessage(message) { posted.push(message); } },
@@ -90,7 +91,7 @@ function createRuntime(root, selected) {
     hotboxButton,
     minder,
     posted,
-    respond(message) { messages.find(([name]) => name === 'message')[1]({ data: message }); },
+    respond(message) { messages.find(([name]) => name === 'message')[1]({ data: { protocolVersion: 1, ...message } }); },
   };
 }
 
@@ -137,6 +138,7 @@ test('successful non-root split removes exactly the unchanged exported subtree',
   runtime.minder.on('splitNodeRequest', ({ node: requested }) => runtime.editor.nodeSplit.request(requested));
   runtime.hotboxButton.action();
   const request = runtime.posted.find(({ command }) => command === 'splitNode');
+	assert.equal(request.protocolVersion, 1);
   assert.equal(request.nodeText, 'Child');
   assert.equal(request.isRoot, false);
   assert.deepEqual(JSON.parse(request.content), {

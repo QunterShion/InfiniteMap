@@ -5,7 +5,8 @@
 > - 2026-07-18 初版：仅 5 个 MCP 工具基线上的方案评估，只产出设计不改造。
 > - 2026-07-26 第一次修订：基线更新为 8 个工具，协同链路已具备 `fileRevision` / `expectedRevision` 乐观校验；Phase 0（规则协调）与 Phase 0.5（revision 推广）落地。
 > - 2026-07-26 第二次修订：Phase 1（锁与租约）与简化版 Phase 2（节点卡片执行状态展示）落地，全文按**最终实现**回写；MCP 工具总数 8 → 12。
-> - 2026-08-10 第三次修订（当前版本）：Phase 3 将租约协议扩展到 `待协同`，新增协同认领与原子完成工具；MCP 工具总数 12 → 14。
+> - 2026-08-10 第三次修订：Phase 3 将租约协议扩展到 `待协同`，新增协同认领与原子完成工具；MCP 工具总数 12 → 14。
+> - 2026-08-11 第四次修订（当前版本）：编辑器会话追溯 Phase 1 落地，新增会话记录与分页查询工具；完成/释放链路支持原子会话终态，MCP 工具总数 14 → 16。
 
 ## 1. 结论
 
@@ -212,6 +213,27 @@ todos[] 每项额外携带：
 
 全部通过后为每个目标追加无标签直接子节点、把父节点原子改为 `已完成`，再把旁车置为 `done` 并记录 `generatedNodeIds`。任一目标失败则整批零写入。因为校验的是目标子树而非全文件 revision，不同协同节点可以并行产出并先后安全提交。
 
+### 4.9 `km_record_session`
+
+```text
+入参：filePath, nodeId, executionId, taskKind, status, session, workerId,
+     claimId?, expectedRevision?, requestedConfig?, effectiveConfig?,
+     summary?, artifacts?, generatedNodeIds?, error?, dryRun?
+返回：{ filePath, executionId, nodeId, dryRun, created, status,
+       historyCount, revisionBefore, revisionAfter }
+```
+
+工具只接受 Provider 内部 trace context 生成的 execution/session 绑定；活动租约下校验 `claimId + workerId`，待协同运行态还必须携带最新 `expectedRevision`。同一 executionId 幂等更新，不重复追加历史。节点只写 `data.infiniteMap.latestSession` 与 `sessionHistoryCount`，完整记录写入 `<km>.sessions.json`；不覆盖 hyperlink/note/resource，也不根据 Provider 自然语言或会话结束修改任务标签。
+
+### 4.10 `km_list_node_sessions`
+
+```text
+入参：filePath, nodeId, cursor?, limit?（1–100，默认 20）
+返回：{ filePath, nodeId, orphan, total, cursor, nextCursor, sessions[] }
+```
+
+历史按更新时间倒序分页；Provider 缺失不影响本地读取，节点删除后返回 `orphan: true`。旁车损坏时先隔离为 `.corrupt-*`，再从 KM 节点最近会话引用恢复最小历史。完成/释放工具传入已绑定的 `executionId` 时，会在同一 KM 锁内同时更新任务内容、节点最近会话和会话旁车终态；KM 先原子写入，旁车失败时仍可从节点引用重建。
+
 ## 5. 并发与写入协议（实现参数）
 
 1. 每个 KM 文件使用旁车锁 `<filePath>.lock`：`fs.openSync(…, 'wx')` 原子创建获得，锁文件记录 `pid` / `acquiredAt` / `expiresAt`。
@@ -234,7 +256,7 @@ todos[] 每项额外携带：
 
 ## 7. 验收场景与测试覆盖
 
-设计验收场景由 `tests/km-exec-claims.test.cjs`、`tests/km-file-writer.test.cjs` 和新增的 `tests/km-collaboration-claims.test.cjs` 覆盖，当前全量 55 个测试通过：
+设计验收场景由 `tests/km-exec-claims.test.cjs`、`tests/km-file-writer.test.cjs`、`tests/km-collaboration-claims.test.cjs` 和 `tests/km-session-state.test.cjs` 覆盖，当前全量 63 个测试通过：
 
 | 验收场景 | 覆盖用例 |
 | --- | --- |
@@ -265,6 +287,7 @@ todos[] 每项额外携带：
 | Phase 1 MCP 事务能力 | 旁车状态、文件锁、原子写、claim/renew/complete/release 四工具，存量工具加锁与租约保护 | ✅ 2026-07-26 |
 | Phase 2 观测（简化） | 不做独立观测界面：扩展端监听 `<km>.exec.json` 推送 Webview，右下角节点卡片展示执行状态/认领人/租约到期/失败原因（含“租约过期”态） | ✅ 2026-07-26 |
 | Phase 3 待协同分批并行 | 新增协同 claim/complete 工具，复用 renew/release，以目标子树哈希支持独立协同节点并行产出和安全串行写回 | ✅ 2026-08-10 |
+| Phase 4 会话追溯 | 新增 `.sessions.json`、节点最近会话、`km_record_session` / `km_list_node_sessions`；完成与释放工具支持原子会话终态 | ✅ 2026-08-11 |
 
 Phase 2 简化实现链路：`mindEditor.ts` 为每个打开的 KM 文档额外创建 `<km>.exec.json` 的 FileSystemWatcher（创建/变化/删除均触发），读取旁车 `tasks` 后以 `execState` 消息推送 Webview，编辑器握手（ready/loaded）时推送一次初始状态；`webui/main.js` 收到消息后写入 `window.kmExecState` 并派发 `km-exec-state` 事件；`nodeCard` 指令据此渲染执行状态区块，卡片可见时实时刷新。原设计中的批次状态查询与审计日志（完整 Phase 2）未实现，如后续需要可基于旁车文件直接扩展。
 
@@ -276,3 +299,4 @@ Phase 2 简化实现链路：`mindEditor.ts` 为每个打开的 KM 文档额外�
 - 跨会话/跨进程并行 → 租约模式，冲突全部显式失败、零静默覆盖；
 - 待协同并行 → 单协调者可并行生成、串行 CAS 写回；多写入者以协同租约和目标子树哈希互不干扰地完成；
 - 执行可观测 → 节点卡片直读旁车状态，无需额外查询工具。
+- 会话可追溯 → 节点保存最近引用、完整历史分页存于 `.sessions.json`，任务完成仍只认 KM 业务校验结果。

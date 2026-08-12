@@ -9,6 +9,7 @@ import {
   readKmFile,
   countNodes,
   getKmFileRevision,
+  buildNodeIndex,
   KmDocument,
   KmNode,
   KM_COLLABORATION_LABEL,
@@ -23,6 +24,11 @@ import {
   isLeaseActive,
   getExecStatePath,
 } from './kmExecState';
+import {
+  commitTerminalSessionUpdate,
+  prepareTerminalSessionUpdate,
+  SessionArtifact,
+} from './kmSessionState';
 
 /** 写回结果 */
 export interface WriteResult {
@@ -56,22 +62,24 @@ export interface ExpandCollaborationResult {
  * 安全地写入 KM 文件：临时文件写入 + JSON 校验 + 原子 rename 替换，
  * 避免并发读取方读到半文件
  */
-function safeWriteFile(filePath: string, content: string): void {
-  atomicWriteJsonFile(filePath, content);
+async function safeWriteFile(filePath: string, content: string): Promise<void> {
+  await atomicWriteJsonFile(filePath, content);
 }
 
 /**
  * 若旁车执行状态存在，把本次完成的节点同步为 done，并刷新旁车中的文件版本
  */
-function syncExecStateAfterWrite(
+async function syncExecStateAfterWrite(
   filePath: string,
   completedNodeIds: string[],
-  completedBy: 'claim' | 'legacy'
-): void {
+  completedBy: 'claim' | 'legacy',
+  /** 调用方在 safeWriteFile 之后已读取一次的版本，传入可省去内部重复读盘 */
+  knownRevision?: string
+): Promise<void> {
   if (!fs.existsSync(getExecStatePath(filePath))) {
     return;
   }
-  const execState = readExecState(filePath);
+  const execState = await readExecState(filePath);
   const nowIso = new Date().toISOString();
   let touched = false;
 
@@ -85,13 +93,14 @@ function syncExecStateAfterWrite(
     }
   }
 
-  const latestRevision = getKmFileRevision(filePath);
+  // 优先使用调用方已计算的版本，避免重复读盘
+  const latestRevision = knownRevision ?? await getKmFileRevision(filePath);
   if (execState.kmRevision !== latestRevision) {
     execState.kmRevision = latestRevision;
     touched = true;
   }
   if (touched) {
-    writeExecState(filePath, execState);
+    await writeExecState(filePath, execState);
   }
 }
 
@@ -147,26 +156,28 @@ function completeNodeByLabel(node: KmNode, labelToRemove: string): void {
  * @param dryRun 是否为试运行模式（不实际写入）
  * @param expectedRevision 可选，由 km_list_todos 返回的文件版本；传入时不匹配即拒绝写入
  */
-export function markNodesDone(
+export async function markNodesDone(
   filePath: string,
   nodeIds: string[],
   dryRun: boolean = false,
-  expectedRevision?: string
-): WriteResult {
+  expectedRevision?: string,
+  sessionUpdate?: { executionId: string; summary?: string; artifacts?: SessionArtifact[] }
+): Promise<WriteResult> {
   const resolved = path.resolve(filePath);
   return withKmFileLock(resolved, () =>
-    markNodesDoneLocked(resolved, nodeIds, dryRun, expectedRevision)
+    markNodesDoneLocked(resolved, nodeIds, dryRun, expectedRevision, sessionUpdate)
   );
 }
 
 /** markNodesDone 的锁内实现：所有校验和写入都基于锁内重新读取的文件 */
-function markNodesDoneLocked(
+async function markNodesDoneLocked(
   resolved: string,
   nodeIds: string[],
   dryRun: boolean,
-  expectedRevision?: string
-): WriteResult {
-  const revisionBefore = getKmFileRevision(resolved);
+  expectedRevision?: string,
+  sessionUpdate?: { executionId: string; summary?: string; artifacts?: SessionArtifact[] }
+): Promise<WriteResult> {
+  const revisionBefore = await getKmFileRevision(resolved);
 
   if (expectedRevision !== undefined) {
     const expected = expectedRevision.trim();
@@ -181,7 +192,7 @@ function markNodesDoneLocked(
   }
 
   // 活跃租约保护：目标节点被其他执行者认领且租约未过期时，禁止绕过 claim 直接回写
-  const execState = readExecState(resolved);
+  const execState = await readExecState(resolved);
   for (const nodeId of nodeIds) {
     const entry = execState.tasks[nodeId];
     if (isLeaseActive(entry)) {
@@ -191,7 +202,7 @@ function markNodesDoneLocked(
     }
   }
 
-  const doc = readKmFile(resolved);
+  const doc = await readKmFile(resolved);
   let modified = 0;
 
   function process(node: KmNode): boolean {
@@ -221,27 +232,37 @@ function markNodesDoneLocked(
 
   process(doc.root);
 
-  if (modified === 0) {
-    return {
-      modified: 0,
-      filePath: resolved,
-      verified: true,
-      revisionBefore,
-      revisionAfter: revisionBefore,
-    };
+  const preparedSession = sessionUpdate
+    ? await prepareTerminalSessionUpdate(resolved, doc, { ...sessionUpdate, status: 'completed' })
+    : undefined;
+  if (preparedSession && !nodeIds.includes(preparedSession.nodeId)) {
+    throw new Error(`executionId 对应节点不属于本次完成目标: ${preparedSession.nodeId}`);
   }
 
+  if (modified === 0) {
+    // 没有节点被修改 → 目标节点不存在或不携带待拆解标签，向调用方报错
+    const err = new Error(
+      `指定的节点 ID 均未找到待拆解标签，未作任何修改: [${nodeIds.join(', ')}]`
+    ) as Error & { code: string };
+    err.code = 'NODE_NOT_FOUND';
+    throw err;
+  }
+
+  // 写后只读一次 revision，后续传入各下游避免重复读盘
+  let revisionAfterWrite: string | undefined;
   if (!dryRun) {
     const content = JSON.stringify(doc, null, 4);
-    safeWriteFile(resolved, content);
-    syncExecStateAfterWrite(resolved, nodeIds, 'legacy');
+    await safeWriteFile(resolved, content);
+    revisionAfterWrite = await getKmFileRevision(resolved);
+    await syncExecStateAfterWrite(resolved, nodeIds, 'legacy', revisionAfterWrite);
+    if (preparedSession) {
+      await commitTerminalSessionUpdate(resolved, preparedSession, revisionAfterWrite);
+    }
   }
 
-  // 校验
+  // 校验：直接在内存文档上验证，无需写后重新读盘（原子写成功则落盘与内存一致）
   let verified = false;
   try {
-    const verifyDoc = readKmFile(resolved);
-    // 验证修改已生效
     let verifyCount = 0;
     function verify(node: KmNode): void {
       if (nodeIds.includes(node.data.id)) {
@@ -256,7 +277,7 @@ function markNodesDoneLocked(
         }
       }
     }
-    verify(verifyDoc.root);
+    verify(doc.root);
     verified = verifyCount === modified;
   } catch {
     verified = false;
@@ -267,7 +288,7 @@ function markNodesDoneLocked(
     filePath: resolved,
     verified,
     revisionBefore,
-    revisionAfter: dryRun ? revisionBefore : getKmFileRevision(resolved),
+    revisionAfter: dryRun ? revisionBefore : revisionAfterWrite!,
   };
 }
 
@@ -279,13 +300,14 @@ function markNodesDoneLocked(
  * @param childTexts 要生成的直接子节点文本
  * @param dryRun 是否为试运行模式（不实际写入）
  */
-export function expandCollaborationTask(
+export async function expandCollaborationTask(
   filePath: string,
   nodeId: string,
   expectedRevision: string,
   childTexts: string[],
-  dryRun: boolean = false
-): ExpandCollaborationResult {
+  dryRun: boolean = false,
+  sessionUpdate?: { executionId: string; summary?: string; artifacts?: SessionArtifact[] }
+): Promise<ExpandCollaborationResult> {
   const resolved = path.resolve(filePath);
   const expected = (expectedRevision || '').trim();
   if (!expected) {
@@ -301,16 +323,16 @@ export function expandCollaborationTask(
     throw new Error(`childTexts[${emptyIndex}] 不能为空`);
   }
 
-  // 版本校验与写入在同一把文件锁内完成，消除“校验通过后被并发写入”的竞态窗口
-  return withKmFileLock(resolved, () => {
-  const revisionBefore = getKmFileRevision(resolved);
+  // 版本校验与写入在同一把文件锁内完成，消除”校验通过后被并发写入”的竞态窗口
+  return withKmFileLock(resolved, async () => {
+  const revisionBefore = await getKmFileRevision(resolved);
   if (revisionBefore !== expected) {
     throw new Error(
       `KM 文件版本已变化，请重新读取最新上下文。expected=${expected}, actual=${revisionBefore}`
     );
   }
 
-  const execState = readExecState(resolved);
+  const execState = await readExecState(resolved);
   const activeEntry = execState.tasks[nodeId];
   if (isLeaseActive(activeEntry)) {
     throw new Error(
@@ -318,10 +340,11 @@ export function expandCollaborationTask(
     );
   }
 
-  const doc = readKmFile(resolved);
-  const existingIds = new Set<string>();
-  collectNodeIds(doc.root, existingIds);
-  const target = findNode(doc.root, nodeId);
+  const doc = await readKmFile(resolved);
+  // 用索引替代 collectNodeIds + findNode 两次 DFS，只遍历一次（MCP-P1-04）
+  const nodeIndex = buildNodeIndex(doc);
+  const existingIds = new Set(nodeIndex.keys());
+  const target = nodeIndex.get(nodeId) ?? null;
 
   if (!target) {
     throw new Error(`未找到节点 ID: ${nodeId}`);
@@ -332,7 +355,7 @@ export function expandCollaborationTask(
     !targetResources.includes(KM_COLLABORATION_LABEL) ||
     targetResources.includes(KM_DONE_LABEL)
   ) {
-    throw new Error(`节点不是有效的"${KM_COLLABORATION_LABEL}"任务: ${nodeId}`);
+    throw new Error(`节点不是有效的”${KM_COLLABORATION_LABEL}”任务: ${nodeId}`);
   }
 
   if (!target.children) {
@@ -347,6 +370,7 @@ export function expandCollaborationTask(
         id,
         created: createdAt + index,
         text,
+        ...(sessionUpdate ? { infiniteMap: { schemaVersion: 1 as const, originExecutionId: sessionUpdate.executionId } } : {}),
       },
       children: [],
     };
@@ -358,18 +382,30 @@ export function expandCollaborationTask(
 
   target.children.push(...childNodes);
   completeNodeByLabel(target, KM_COLLABORATION_LABEL);
+  const preparedSession = sessionUpdate
+    ? await prepareTerminalSessionUpdate(resolved, doc, {
+        ...sessionUpdate,
+        nodeId,
+        status: 'completed',
+        generatedNodeIds: appendedChildren.map((child) => child.nodeId),
+      })
+    : undefined;
 
   let revisionAfter = revisionBefore;
   let verified = true;
 
   if (!dryRun) {
     const content = JSON.stringify(doc, null, 4);
-    safeWriteFile(resolved, content);
-    syncExecStateAfterWrite(resolved, [nodeId], 'legacy');
-    revisionAfter = getKmFileRevision(resolved);
+    await safeWriteFile(resolved, content);
+    // 写后只读一次 revision，传入下游避免重复读盘
+    revisionAfter = await getKmFileRevision(resolved);
+    await syncExecStateAfterWrite(resolved, [nodeId], 'legacy', revisionAfter);
+    if (preparedSession) {
+      await commitTerminalSessionUpdate(resolved, preparedSession, revisionAfter);
+    }
 
-    const verifyDoc = readKmFile(resolved);
-    const verifyTarget = findNode(verifyDoc.root, nodeId);
+    // 校验：在内存 doc 上验证，无需重新读盘（原子写成功则落盘与内存一致）
+    const verifyTarget = nodeIndex.get(nodeId) ?? null;
     if (!verifyTarget) {
       verified = false;
     } else {
@@ -405,17 +441,17 @@ export function expandCollaborationTask(
 /**
  * 校验 KM 文件的 JSON 合法性、节点 ID 唯一性、标签一致性
  */
-export function validateKmFile(filePath: string): {
+export async function validateKmFile(filePath: string): Promise<{
   valid: boolean;
   errors: string[];
   warnings: string[];
-} {
+}> {
   const errors: string[] = [];
   const warnings: string[] = [];
   const ids = new Set<string>();
 
   try {
-    const doc = readKmFile(filePath);
+    const doc = await readKmFile(filePath);
     const totalNodes = countNodes(doc);
 
     // 检查节点 ID 唯一性

@@ -40,22 +40,30 @@ export const kmCompleteCollaborationClaimTool = {
         type: 'boolean',
         description: '是否只校验和预览、不写入文件，默认 false',
       },
+      executionId: {
+        type: 'string',
+        description: '可选，已绑定到本批次某一节点的 executionId；提供时原子写入会话终态和 generatedNodeIds',
+      },
+      summary: { type: 'string', maxLength: 4096 },
     },
     required: ['filePath', 'claimId', 'tasks'],
   },
 };
 
-export function handleKmCompleteCollaborationClaim(args: {
+export async function handleKmCompleteCollaborationClaim(args: {
   filePath: string;
   claimId: string;
   tasks: Array<{ nodeId: string; childTexts: string[] }>;
   dryRun?: boolean;
+  executionId?: string;
+  summary?: string;
 }) {
-  const result = completeCollaborationClaim(
+  const result = await completeCollaborationClaim(
     args.filePath,
     args.claimId,
     args.tasks,
-    args.dryRun ?? false
+    args.dryRun ?? false,
+    args.executionId ? { executionId: args.executionId, summary: args.summary } : undefined
   );
   return {
     content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],

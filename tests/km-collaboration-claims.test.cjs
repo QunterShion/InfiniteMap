@@ -54,12 +54,12 @@ function createFixture(t) {
   return filePath;
 }
 
-test('claims collaboration tasks without modifying the KM file', (t) => {
+test('claims collaboration tasks without modifying the KM file', async (t) => {
   const filePath = createFixture(t);
   const before = fs.readFileSync(filePath, 'utf8');
   const revision = getKmFileRevision(filePath);
 
-  const claim = claimCollaborationTasks(filePath, 'agent-a', {
+  const claim = await claimCollaborationTasks(filePath, 'agent-a', {
     expectedFileRevision: revision,
   });
 
@@ -74,18 +74,18 @@ test('claims collaboration tasks without modifying the KM file', (t) => {
   assert.equal(execState.tasks['collab-a'].state, 'claimed');
 });
 
-test('different workers complete independent collaboration nodes after unrelated writes', (t) => {
+test('different workers complete independent collaboration nodes after unrelated writes', async (t) => {
   const filePath = createFixture(t);
-  const first = claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
-  const second = claimCollaborationTasks(filePath, 'agent-b', { nodeIds: ['collab-b'] });
+  const first = await claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
+  const second = await claimCollaborationTasks(filePath, 'agent-b', { nodeIds: ['collab-b'] });
 
-  const completedA = completeCollaborationClaim(filePath, first.claimId, [
+  const completedA = await completeCollaborationClaim(filePath, first.claimId, [
     { nodeId: 'collab-a', childTexts: ['idea A1', 'idea A2'] },
   ]);
   assert.equal(completedA.verified, true);
 
   // collab-a 写回改变了全文件 revision，但 collab-b 子树未变，旧 claim 仍可安全完成。
-  const completedB = completeCollaborationClaim(filePath, second.claimId, [
+  const completedB = await completeCollaborationClaim(filePath, second.claimId, [
     { nodeId: 'collab-b', childTexts: ['idea B1'] },
   ]);
   assert.equal(completedB.verified, true);
@@ -97,12 +97,12 @@ test('different workers complete independent collaboration nodes after unrelated
   }
 });
 
-test('dry-run previews collaboration completion without writing', (t) => {
+test('dry-run previews collaboration completion without writing', async (t) => {
   const filePath = createFixture(t);
-  const claim = claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
+  const claim = await claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
   const before = fs.readFileSync(filePath, 'utf8');
 
-  const result = completeCollaborationClaim(
+  const result = await completeCollaborationClaim(
     filePath,
     claim.claimId,
     [{ nodeId: 'collab-a', childTexts: ['idea one'] }],
@@ -116,31 +116,31 @@ test('dry-run previews collaboration completion without writing', (t) => {
   assert.equal(readExecState(filePath).tasks['collab-a'].state, 'claimed');
 });
 
-test('session trace metadata does not invalidate a collaboration claim', (t) => {
+test('session trace metadata does not invalidate a collaboration claim', async (t) => {
   const filePath = createFixture(t);
-  const claim = claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
+  const claim = await claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
   const doc = readKmFile(filePath);
   doc.root.children[0].data.infiniteMap = {
     latestSession: { executionId: 'exec-1', provider: 'codex' },
   };
   fs.writeFileSync(filePath, JSON.stringify(doc, null, 2), 'utf8');
 
-  const result = completeCollaborationClaim(filePath, claim.claimId, [
+  const result = await completeCollaborationClaim(filePath, claim.claimId, [
     { nodeId: 'collab-a', childTexts: ['idea after session binding'] },
   ]);
   assert.equal(result.verified, true);
 });
 
-test('rejects completion when the claimed collaboration subtree changed', (t) => {
+test('rejects completion when the claimed collaboration subtree changed', async (t) => {
   const filePath = createFixture(t);
-  const claim = claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
+  const claim = await claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
   const doc = readKmFile(filePath);
   doc.root.children[0].children[0].data.text = 'manually changed';
   fs.writeFileSync(filePath, JSON.stringify(doc, null, 2), 'utf8');
   const before = fs.readFileSync(filePath, 'utf8');
 
-  assert.throws(
-    () => completeCollaborationClaim(filePath, claim.claimId, [
+  await assert.rejects(
+    completeCollaborationClaim(filePath, claim.claimId, [
       { nodeId: 'collab-a', childTexts: ['stale idea'] },
     ]),
     /子树在认领后已被修改/
@@ -148,16 +148,16 @@ test('rejects completion when the claimed collaboration subtree changed', (t) =>
   assert.equal(fs.readFileSync(filePath, 'utf8'), before);
 });
 
-test('batch completion is all-or-nothing when one target conflicts', (t) => {
+test('batch completion is all-or-nothing when one target conflicts', async (t) => {
   const filePath = createFixture(t);
-  const claim = claimCollaborationTasks(filePath, 'agent-a');
+  const claim = await claimCollaborationTasks(filePath, 'agent-a');
   const doc = readKmFile(filePath);
   doc.root.children[1].data.text = 'collaboration B changed';
   fs.writeFileSync(filePath, JSON.stringify(doc, null, 2), 'utf8');
   const before = fs.readFileSync(filePath, 'utf8');
 
-  assert.throws(
-    () => completeCollaborationClaim(filePath, claim.claimId, [
+  await assert.rejects(
+    completeCollaborationClaim(filePath, claim.claimId, [
       { nodeId: 'collab-a', childTexts: ['idea A'] },
       { nodeId: 'collab-b', childTexts: ['idea B'] },
     ]),
@@ -167,34 +167,34 @@ test('batch completion is all-or-nothing when one target conflicts', (t) => {
   assert.equal(listCollaborationTasks(filePath).taskCount, 2);
 });
 
-test('collaboration claims reuse renew and release, then can be reclaimed', (t) => {
+test('collaboration claims reuse renew and release, then can be reclaimed', async (t) => {
   const filePath = createFixture(t);
-  const claim = claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
-  const renewed = renewClaim(filePath, claim.claimId, 'agent-a', 1200);
+  const claim = await claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
+  const renewed = await renewClaim(filePath, claim.claimId, 'agent-a', 1200);
   assert.equal(renewed.renewedCount, 1);
 
-  const released = releaseClaim(filePath, claim.claimId, { failReason: 'agent failed' });
+  const released = await releaseClaim(filePath, claim.claimId, { failReason: 'agent failed' });
   assert.equal(released.state, 'failed');
   assert.deepEqual(readKmFile(filePath).root.children[0].data.resource, [COLLABORATION]);
 
-  const reclaimed = claimCollaborationTasks(filePath, 'agent-b', {
+  const reclaimed = await claimCollaborationTasks(filePath, 'agent-b', {
     nodeIds: ['collab-a'],
   });
   assert.equal(reclaimed.claimedCount, 1);
   assert.equal(reclaimed.workerId, 'agent-b');
 });
 
-test('legacy completion tools cannot bypass an active collaboration lease', (t) => {
+test('legacy completion tools cannot bypass an active collaboration lease', async (t) => {
   const filePath = createFixture(t);
-  const claim = claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
+  const claim = await claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
   const revision = getKmFileRevision(filePath);
 
-  assert.throws(
-    () => expandCollaborationTask(filePath, 'collab-a', revision, ['legacy idea']),
+  await assert.rejects(
+    expandCollaborationTask(filePath, 'collab-a', revision, ['legacy idea']),
     /km_complete_collaboration_claim/
   );
-  assert.throws(
-    () => completeClaim(filePath, claim.claimId),
+  await assert.rejects(
+    completeClaim(filePath, claim.claimId),
     /km_complete_collaboration_claim/
   );
 });

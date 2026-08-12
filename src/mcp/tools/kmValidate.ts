@@ -18,8 +18,8 @@ export const kmValidateTool = {
   },
 };
 
-export function handleKmValidate(args: { filePath: string }) {
-  const result = validateKmFile(args.filePath);
+export async function handleKmValidate(args: { filePath: string }) {
+  const result = await validateKmFile(args.filePath);
 
   let summary = '';
   if (result.valid) {

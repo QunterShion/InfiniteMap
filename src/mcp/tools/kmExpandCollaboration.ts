@@ -3,19 +3,22 @@
  */
 import { expandCollaborationTask } from '../services/kmFileWriter';
 
-export function handleKmExpandCollaboration(args: {
+export async function handleKmExpandCollaboration(args: {
   filePath: string;
   nodeId: string;
   expectedRevision: string;
   childTexts: string[];
   dryRun?: boolean;
+  executionId?: string;
+  summary?: string;
 }) {
-  const result = expandCollaborationTask(
+  const result = await expandCollaborationTask(
     args.filePath,
     args.nodeId,
     args.expectedRevision,
     args.childTexts,
-    args.dryRun ?? false
+    args.dryRun ?? false,
+    args.executionId ? { executionId: args.executionId, summary: args.summary } : undefined
   );
   return {
     content: [

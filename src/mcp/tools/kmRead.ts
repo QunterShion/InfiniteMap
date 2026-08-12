@@ -18,8 +18,8 @@ export const kmReadTool = {
   },
 };
 
-export function handleKmRead(args: { filePath: string }) {
-  const summary = getKmSummary(args.filePath);
+export async function handleKmRead(args: { filePath: string }) {
+  const summary = await getKmSummary(args.filePath);
   return {
     content: [
       {

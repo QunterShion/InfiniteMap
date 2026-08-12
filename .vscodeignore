@@ -9,6 +9,7 @@ types/**
 config
 
 node_modules
+!node_modules/@modelcontextprotocol/sdk/**
 
 .gitignore
 tsconfig.json

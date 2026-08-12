@@ -1,24 +1,26 @@
 # InfiniteMap 编辑器智能体会话驱动任务执行设计
 
-> 状态：可实施设计稿
-> 版本：v1.2
+> 状态：已实施并验收
+> 版本：v1.3
 > 日期：2026-08-10
+> 实施完成：2026-08-11
 > 适用项目：`Workspace/openSource/InfiniteMap`
 > 规则基线：`Workspace/harnessRules/brainstorm-executer/requirement-instruction-breakdown-rules.md`
 > 本次修订：§20 以 UI 组件为牵引重新规划 7 个落地阶段（Phase 0–6）；新增 §26 架构与性能优化建议（mindEditor 拆分、revision 缓存、async 文件锁、Webview 协议版本化等）
+> 验收证据：[`Workspace/validations/infinite-map-agent-tasks/validation-report.md`](../../../validations/infinite-map-agent-tasks/validation-report.md)；Provider 外部服务行为由 Fake runtime 契约测试覆盖，避免把账号或网络可用性混入发布验收。
 
 ## 1. 结论
 
-InfiniteMap 应新增一个由编辑器扩展宿主管理的“智能体控制条与会话追溯协调器”，让用户在 `.km` 编辑器下方直接创建或继续 Codex/Copilot 会话。用户消息的任务语义与在 VS Code 智能体插件中直接发送当前 `.km` 路径保持一致，由目标智能体按 `requirement-instruction-breakdown-rules.md` 自行发现、认领、执行并通过 InfiniteMap MCP 回写 `待拆解` / `待协同` 节点。
+InfiniteMap 应新增一个由编辑器扩展宿主管理的“智能体控制条与会话追溯协调器”，让用户在 `.km` 编辑器下方直接创建或继续 Codex、Claude Agent、Copilot 会话。用户消息的任务语义与在 VS Code 智能体插件中直接发送当前 `.km` 路径保持一致，由目标智能体按 `requirement-instruction-breakdown-rules.md` 自行发现、认领、执行并通过 InfiniteMap MCP 回写 `待拆解` / `待协同` 节点。
 
 本设计采用以下边界：
 
 1. **编辑器扩展是会话启动器与观察器**：负责可信路径注入、Provider/model/effort 选择、会话创建/追加/中止、状态展示和会话追溯，不重复实现 KM 任务协调状态机。
 2. **智能体会话是 KM 执行协调者**：收到与直接发送路径等价的用户输入后，按现行 KM 规则完成最新文件读取、任务发现、上下文获取、租约、dry-run、实际回写和最终校验。
-3. **所有 `.km` 读取和写入仍只通过 InfiniteMap MCP**：Webview、Extension Host 和 Provider 组件都不得为了方便直接修改 KM；编辑器只通过 MCP 查询状态或写会话追溯元数据。
+3. **所有 `.km` 读取和写入仍只通过 InfiniteMap MCP**：Webview、Extension Host 和内置 Provider Adapter 都不得为了方便直接修改 KM；编辑器只通过 MCP 查询状态或写会话追溯元数据。
 4. **节点信息卡只读**：仅展示任务状态、最近会话和历史会话入口，不放置 Provider、model、effort、发送、追加发送、中止、审核或回写操作。
 5. **所有会话控制统一进入编辑器下方中部控制条**：每次发送或追加发送都由 Extension Host 注入当前打开 `.km` 的可信路径；输入框允许为空，此时用户消息严格等于该路径。
-6. **Provider 运行组件按需安装与加载**：InfiniteMap 主 VSIX 只包含 Provider SPI、注册表、控制条和通用会话能力，不捆绑 Codex/Copilot Adapter、CLI、SDK 或 Provider 专属 schema。
+6. **三套 Provider 运行时均由主扩展按需安装与加载**：InfiniteMap 主 VSIX 内置 Codex、Claude Agent、Copilot Adapter、注册表、控制条和通用会话能力；首次使用时由主扩展把经过固定版本与完整性校验的官方运行时下载到扩展 `globalStorage`，不生成或安装第二个 Provider VSIX。
 7. **会话追溯与任务完成解耦**：节点保存最近一次会话最小引用，完整历史保存在 `<km>.sessions.json`；会话结束不等于任务完成，任务是否完成以智能体执行 KM 规则后的 MCP 状态为准。
 8. **Codex Provider 使用官方 app-server**；Copilot Provider 优先使用公开 SDK，会话无法定向打开到原生 UI 时由 InfiniteMap 展示本地历史，不使用私有存储或未文档化命令。
 
@@ -29,11 +31,11 @@ InfiniteMap 应新增一个由编辑器扩展宿主管理的“智能体控制�
 ### 2.1 建设目标
 
 - 在编辑器画布下方中部提供统一“智能体控制条”，不在节点信息卡放置操作入口。
-- 支持动态选择已安装的 Codex、Copilot 或后续 Provider，以及 Provider 实际返回的 model、effort 等参数。
+- 支持动态选择内置的 Codex、Claude Agent、Copilot，以及 Provider 实际返回的 model、effort 等参数。
 - 支持新建会话发送、向当前会话追加发送、中止当前 turn、查询/更新会话元数据和打开历史会话。
 - 每次发送与追加发送都默认带入当前编辑器打开的 `.km` 路径；输入框为空时只发送该路径。
 - 发送行为与用户直接在对应 VS Code 智能体插件中输入同一路径等价，智能体按 KM 规则自行处理全部待拆解/待协同任务。
-- Provider 缺失时按需引导安装，选择或恢复会话时才激活加载；主 VSIX 不预装 Provider 运行组件。
+- Codex Server 缺失时按需引导安装，选择或恢复会话时才启动；主 VSIX 不预置平台二进制，而是安装到 InfiniteMap 用户级存储。
 - 把最近一次会话链接写入节点信息；从节点可查询并打开历史执行会话。
 - 支持 VS Code 窗口重载、Webview 重载、Extension Host 重启后的恢复和补偿。
 
@@ -41,7 +43,7 @@ InfiniteMap 应新增一个由编辑器扩展宿主管理的“智能体控制�
 
 - 不让 Webview 直接访问 Codex、Copilot、MCP 或本地文件系统。
 - 不在节点信息卡提供发送、中止、Provider/model/effort、认领、审核或回写操作。
-- 不在 InfiniteMap 主 VSIX 中捆绑 Codex CLI/app-server、Copilot SDK/runtime 或 Provider 专属 Adapter。
+- 不在 InfiniteMap 主 VSIX 中预置平台相关 Codex 二进制；Codex Adapter 属于主扩展，Codex app-server 二进制由主扩展按需下载并校验后安装到 `globalStorage`。
 - 不把会话正文、访问令牌、授权头或完整工具日志写入 KM。
 - 不自动修改没有 `待拆解` / `待协同` 标签的普通节点。
 - 不允许用 Copilot 私有数据库、内部模块、磁盘日志或未文档化 command 参数模拟原生会话 CRUD。
@@ -60,7 +62,7 @@ InfiniteMap 应新增一个由编辑器扩展宿主管理的“智能体控制�
 | 支持发送/追加发送/中止 | §11.3、§14、§15.2 | 映射 create/turn/steer/interrupt，状态幂等 |
 | 发送默认带入当前 KM 路径 | §11.1 | Host 注入可信路径，行为等同直接发送路径 |
 | 空输入仍可发送/追加 | §11.1、§11.3 | 用户消息严格只含当前 KM 路径 |
-| Provider 组件按需安装/加载，不捆绑主 VSIX | §5.2、§12.2、§21.4、§22.1 | 主 VSIX 解包无 Provider runtime/SDK/schema |
+| Codex Server 按需安装/加载，保持单 VSIX | §5.2、§12.2、§21.4、§22.1 | 只产出 InfiniteMap VSIX；Codex 二进制安装到 `globalStorage` |
 
 ## 3. 现状基线与可复用能力
 
@@ -127,9 +129,9 @@ flowchart LR
     MCP["KmMcpClient<br/>stdio MCP client"]
     KMS["InfiniteMap MCP Server<br/>14+ KM tools"]
     SA["SessionOrchestrator"]
-    PR["ProviderComponentRegistry<br/>按需发现 / 安装 / 激活"]
-    CA["Codex Provider Extension"]
-    PA["Copilot Provider Extension"]
+    PR["ProviderComponentRegistry<br/>内置 Codex / 按需安装 Server"]
+    CA["Codex Adapter<br/>主扩展内置"]
+    CR["Codex app-server<br/>globalStorage"]
     AG["目标智能体<br/>KM 规则协调者"]
     KM[".km + .exec.json + .sessions.json"]
 
@@ -138,9 +140,9 @@ flowchart LR
     CO --> SA
     SA --> PR
     PR --> CA
-    PR --> PA
+    PR --> CR
+    CA --> CR
     CA -->|"Thread / Turn / Item"| AG
-    PA -->|"Session / Request events"| AG
     AG --> MCP
     MCP --> KMS
     KMS --> KM
@@ -154,8 +156,8 @@ flowchart LR
 | 进程               | 允许职责                                                         | 禁止职责                                          |
 | ------------------ | ---------------------------------------------------------------- | ------------------------------------------------- |
 | Webview            | 展示控制条/节点状态/会话历史，收集用户输入和当前选中节点 ID       | 提供可信路径、文件读写、启动进程、保存 Token、直接调用 Provider |
-| Extension Host     | 派生可信路径、Provider 组件发现/安装/加载、会话生命周期、Deep Link、dirty 检查 | 复制 KM 任务协调逻辑、绕过 MCP 修改 KM            |
-| Provider 组件      | 把统一会话接口映射到 Codex/Copilot，返回模型/effort/会话事件      | 修改 KM、向主扩展暴露 Token、静默安装其他组件     |
+| Extension Host     | 派生可信路径、安装/校验 Codex Server、管理 Adapter 与会话生命周期、Deep Link、dirty 检查 | 复制 KM 任务协调逻辑、绕过 MCP 修改 KM            |
+| 内置 Codex Adapter | 把统一会话接口映射到 app-server，返回模型/effort/会话事件         | 修改 KM、读取其他扩展私有二进制、修改用户全局 PATH |
 | 智能体会话         | 按 KM 规则发现/认领/执行/验证任务并调用 InfiniteMap MCP           | 使用文件系统 API 直接修改 `.km`                   |
 | InfiniteMap MCP    | KM 读取、校验、认领、续租、会话引用、完成和协同扩散              | 创建或控制 Provider 会话                          |
 
@@ -172,8 +174,11 @@ src/
   providers/
     providerComponentApi.ts
     providerComponentRegistry.ts
-    providerComponentInstaller.ts
-    providerComponentLoader.ts
+    codexRuntimeInstaller.ts
+    codex/
+      CodexRuntimeManager.ts
+      CodexAppServerClient.ts
+      CodexAgentSessionAdapter.ts
   mcpClient/
     kmMcpClient.ts
     kmToolContracts.ts
@@ -193,7 +198,7 @@ webui/
   less/agentSession.less
 ```
 
-Codex/Copilot Provider 的实现、SDK、CLI 与版本化 schema 位于独立 companion VS Code 扩展，不进入上述主 VSIX 模块树。`mindEditor.ts` 只增加消息分派和生命周期绑定，不继续堆叠会话业务逻辑。
+Codex Adapter 位于主扩展模块树并随唯一的 InfiniteMap VSIX 打包；平台相关 Codex 二进制不进入 VSIX，而是在用户确认后下载到 `globalStorage`。`mindEditor.ts` 只增加消息分派和生命周期绑定，不继续堆叠会话业务逻辑。
 
 ## 6. 统一领域模型
 
@@ -440,7 +445,7 @@ Codex `turn/start` 可使用 `outputSchema` 强制该结构。Copilot Provider �
 
 ## 8. 编辑器启动与任务发现流程
 
-编辑器启动时只发现当前文档、Provider 组件和只读任务状态；不在用户发送前预先认领任务。完整 KM 任务发现由目标智能体收到路径后按规则执行：
+编辑器启动时只发现当前文档、内置 Provider 和只读任务状态；不在用户发送前预先认领任务。完整 KM 任务发现由目标智能体收到路径后按规则执行：
 
 ```mermaid
 sequenceDiagram
@@ -477,7 +482,7 @@ sequenceDiagram
 
 - 当前文档必须是本地 `.km`，路径必须由 Extension Host 从当前 Custom Document 推导。
 - dirty 文档必须先保存；保存失败或用户取消时不创建/不追加 Provider turn。
-- Provider 组件缺失、API 版本不兼容、未登录或当前模型不可用时禁用发送并提供对应安装/登录/诊断入口，不静默切换 Provider 或模型。
+- Codex Server 缺失、API 版本不兼容、未登录或当前模型不可用时禁用发送并提供对应安装/登录/诊断入口，不静默切换 Provider 或模型。
 - Provider 必须声明可把 InfiniteMap 规则上下文交给智能体并连接 InfiniteMap MCP，才能标记为 `kmTaskExecution=true`。
 - 节点信息卡可通过 MCP/旁车查询最新状态，但不得承担发送或中止入口。
 
@@ -603,7 +608,7 @@ function buildUserTurn(text: string, kmPath: string): string {
 
 ### 11.2 Provider 内部控制上下文
 
-Provider 组件可通过独立于用户消息正文的 developer/system context 注入以下执行约束，不得改写 §11.1 的用户消息：
+内置 Provider Adapter 可通过独立于用户消息正文的 developer/system context 注入以下执行约束，不得改写 §11.1 的用户消息：
 
 - 当前会话需要按 `requirement-instruction-breakdown-rules.md` 处理 `.km` 路径；
 - 所有 `.km` 读取、检索、校验和回写必须使用 InfiniteMap MCP；
@@ -682,9 +687,9 @@ interface SessionCapabilities {
 
 模型和 effort 必须由当前组件、当前账号、当前 runtime 动态返回。用户显式选择的模型/effort 失效时阻止发送并要求重新选择，不得静默替换；执行记录同时保存 requested/effective 配置和降级原因。`cwd`、安全策略、工具能力等关键参数无法满足时必须阻断，不能按可选参数静默丢弃。
 
-### 12.2 Provider 组件按需分发与生命周期
+### 12.2 三 Provider 按需安装与生命周期
 
-InfiniteMap 主 VSIX 只包含 `ProviderComponentApiV1`、固定 allowlist/catalog、Registry、安装入口和 Loader。Codex/Copilot Adapter 作为独立 companion VS Code 扩展发布，不声明为主扩展的 `extensionDependencies`，也不把 Provider CLI、SDK/runtime、schema 或原生二进制打进主 VSIX。
+InfiniteMap 主 VSIX 内置 `ProviderComponentApiV1`、Codex/Claude Agent/Copilot Adapter、固定 catalog、Registry 和安装器。三套 Provider 都不是另一个 VS Code 扩展：安装器根据 `process.platform + process.arch` 选择官方固定版本资产，下载到 InfiniteMap 的 `globalStorage`，完成完整性校验后再原子落盘并启动。Codex 使用 OpenAI release 与 SHA-256；Claude Agent、Copilot 使用官方 npm 平台包与 SHA-512 integrity。
 
 ```ts
 interface ProviderComponentApiV1 {
@@ -698,26 +703,27 @@ interface ProviderComponentApiV1 {
 
 ```text
 missing
-→ 用户选择 Provider
-→ 展示安装入口并等待用户确认
+→ 用户选择 Codex
+→ 展示 Codex Server 安装入口并等待用户确认
+→ 下载官方固定版本资产
+→ SHA-256 校验
+→ 安装到 globalStorage/codex/<version>/<platform-arch>/
 → installed_inactive
-→ 用户发送或恢复该 Provider 会话时 extension.activate()
-→ 校验 publisher / extensionId / apiVersion
-→ capability + auth + model probe
+→ 启动 codex app-server
+→ initialize + account/read + model/list
 → ready | auth_required | degraded | incompatible | failed
 ```
 
 约束：
 
-- 只加载 catalog allowlist 中的扩展 ID，禁止扫描磁盘并执行任意 JS；
-- 安装必须由用户确认并打开正式 Marketplace/扩展详情，不静默执行内部安装命令；
-- 不在 `globalStorage` 中运行 `npm install`，避免供应链、平台二进制、升级和卸载失控；
-- 仅选择 Provider、发送消息或恢复其活动会话时激活组件，不在 InfiniteMap 启动时激活全部 Provider；
-- Provider 升级、禁用或卸载通过 `vscode.extensions.onDidChange` 重新探测；已激活扩展无法可靠热卸载时，只释放 Adapter/Session 资源，不承诺卸载代码；
-- Provider 缺失或不兼容不影响节点卡查看本地历史，也不影响其他 Provider；
-- 主 VSIX 构建必须解包审计，确认不存在 Codex/Copilot Provider 实现和专属依赖。
+- 安装必须由用户在 Webview 确认；不得调用 `extension.open` 或依赖 Marketplace 中不存在的扩展 ID；
+- Codex 只允许 `https://github.com/openai/codex/releases/` 官方资产；Claude Agent、Copilot 只允许各自官方 npm 平台包；版本、文件名/包名和完整性值固定在安装器发布清单中；
+- 不运行 `npm install`、`curl | sh`、Homebrew，也不修改用户全局 PATH；
+- 下载写入临时目录，校验通过后原子移动到版本目录；失败清理临时文件并保留明确重试入口；
+- 主 VSIX 构建必须只产出 `infinite-map-<version>.vsix`，不得生成 `infinite-map-provider-*.vsix`；
+- 任一 Provider 运行时缺失或不兼容都不影响节点卡查看本地历史和普通思维导图编辑。
 
-### 12.3 Codex Provider 组件
+### 12.3 内置 Codex Provider
 
 Codex 使用官方 `codex app-server` stdio JSONL 协议：
 
@@ -738,11 +744,11 @@ Codex 使用官方 `codex app-server` stdio JSONL 协议：
 
 实施要求：
 
-- Codex companion 组件首次使用时才探测用户已安装的 Codex runtime 并懒启动 app-server；主 InfiniteMap VSIX 不包含 runtime。
+- 首次使用时由主扩展安装器把 Codex runtime 安装到 `globalStorage`，随后懒启动 app-server；主 InfiniteMap VSIX 不包含平台二进制。
 - 连接后先注册通知/Server Request 处理器，再发送 `initialize` 和 `initialized`；随后执行 `account/read`、完整分页 `model/list`，必要时读取 model/provider capability。
 - `clientInfo.name` 使用明确的集成标识，如 `infinite_map_vscode`，不得冒用 `codex_vscode`。
 - 默认使用稳定 API，不启用 `experimentalApi`；需要分页 turns/items 时另设实验特性开关。
-- Provider 组件通过 `codex app-server generate-ts` / `generate-json-schema` 获取与安装版本匹配的协议类型；runtime 版本变化时失效旧 schema/capability 缓存。
+- 内置 Codex Adapter 通过 `codex app-server generate-json-schema` 获取与安装版本匹配的协议结构；runtime 版本变化时失效旧 schema/capability 缓存。
 - `sessionId` 和 `threadId` 都使用 `thread.id`；服务返回的 `thread.sessionId` 仅作为 session tree ID，不得混作会话主键。
 - `model/list` 返回的默认模型和 effort 是 UI 唯一事实来源，`includeHidden` 默认 false；账号、runtime 或 app-server 重启后重新读取。
 - 使用 `outputSchema` 强制回执结构。
@@ -754,7 +760,7 @@ Codex 使用官方 `codex app-server` stdio JSONL 协议：
 
 #### 12.3.1 Runtime、握手与 schema 管理
 
-Codex companion 内部的 `CodexRuntimeManager` 按以下顺序解析 runtime：Provider 自己的高级设置显式路径 → `PATH` 中的 `codex` → `missing`。不得探测或复用 Codex VS Code 扩展的私有 bundled binary，也不得由 InfiniteMap 主扩展修改用户全局 `PATH`。
+主扩展内的 `CodexRuntimeManager` 只使用 InfiniteMap 安装器返回的受管二进制路径（高级显式路径仅供开发诊断）。不得探测或复用 Codex VS Code 扩展的私有 bundled binary，也不得修改用户全局 `PATH`。
 
 Ready 判定必须完成整条链路，不能只检查文件存在：
 
@@ -770,7 +776,7 @@ codex --version
 → ready | auth_required | degraded | incompatible
 ```
 
-runtime fingerprint 至少包含 executable realpath、Codex version、binary mtime/hash 和 experimentalApi 开关。每个 fingerprint 通过当前可执行文件生成 JSON Schema/TS schema，写入 Codex companion 自己的 storage；多窗口用锁与临时目录 + atomic rename 防止生成半成品。版本变化立即失效旧 schema、model 和 capability 缓存。解析采用 tolerant reader：未知附加字段/通知记录后忽略；核心请求、响应或必需字段不兼容时标记 `incompatible`，禁止新建 turn，但保留本地历史。
+runtime fingerprint 至少包含 executable realpath、Codex version、binary mtime/hash 和 experimentalApi 开关。每个 fingerprint 通过当前可执行文件生成 JSON Schema，写入 InfiniteMap `globalStorage/codex-state`；多窗口用锁与临时目录 + atomic rename 防止生成半成品。版本变化立即失效旧 schema、model 和 capability 缓存。解析采用 tolerant reader：未知附加字段/通知记录后忽略；核心请求、响应或必需字段不兼容时标记 `incompatible`，禁止新建 turn，但保留本地历史。
 
 #### 12.3.2 Thread、Turn 与提交幂等
 
@@ -797,18 +803,18 @@ interface CodexSubmissionState {
 
 通知处理器必须在发请求前注册，并至少处理/关联：`thread/status/changed`、`turn/started`、`item/started`、`item/agentMessage/delta`、`item/commandExecution/outputDelta`、`item/completed`、`turn/diff/updated`、`turn/completed` 和 `model/rerouted`。事件以 `threadId + turnId + itemId` 去重；Extension Host 生成的 Webview `sequence` 只负责重放顺序，不能替代 Provider 事件身份。
 
-App Server 还可能向客户端发起审批、elicitation 或工具授权请求。Codex companion 必须把这些 Server Request 映射到版本化 Provider 事件，并在 Provider 会话详情中完成用户决策；不处理会导致 turn 永久等待，因此不能把它们当未知通知丢弃。Extension Host 重启后先 `thread/read`，只有继续交互时才 `thread/resume`；无法恢复原生线程时保留 InfiniteMap 历史和复制 ID，禁止创建一个新 thread 冒充旧会话。
+App Server 还可能向客户端发起审批、elicitation 或工具授权请求。内置 Codex Adapter 必须把这些 Server Request 映射到版本化 Provider 事件，并在 Provider 会话详情中完成用户决策；不处理会导致 turn 永久等待，因此不能把它们当未知通知丢弃。Extension Host 重启后先 `thread/read`，只有继续交互时才 `thread/resume`；无法恢复原生线程时保留 InfiniteMap 历史和复制 ID，禁止创建一个新 thread 冒充旧会话。
 
 官方参考：
 
 - [Codex App Server](https://learn.chatgpt.com/docs/app-server)
 - [Codex IDE extension commands](https://learn.chatgpt.com/docs/developer-commands.md?surface=ide)
 
-### 12.4 Copilot Provider 组件
+### 12.4 内置 Copilot Provider
 
-经接口评估（`docs/copilot.md`），GitHub Copilot SDK 已 GA，提供完整的 Agent Session CRUD、send/steer/abort、事件订阅和生命周期管理，VS Code 自身的 Copilot harness 也由该 SDK 驱动。Copilot companion 组件**明确只采用 `CopilotSdkAdapter`** 方案，不再设计 CopilotPublicAdapter 或 CopilotBridgeAdapter，也不设计默认通过 `vscode.lm` 管理会话摘要的降级路径。
+经接口评估（`docs/copilot.md`），GitHub Copilot SDK 已 GA，提供 Agent Session CRUD、send/steer/abort、事件订阅和生命周期管理。当前版本已将 `CopilotSdkAdapter` 内置到单一 InfiniteMap VSIX，并把固定版本的官方平台运行时按需安装到 `globalStorage`。
 
-1. **主实现 `CopilotSdkAdapter`**：Provider VSIX 内部依赖 `@github/copilot-sdk` 与捆绑 Node.js runtime，支持 InfiniteMap 创建/恢复/列举/历史/发送/中止/事件等完整 Session 生命周期；这些依赖不得进入 InfiniteMap 主 VSIX。
+1. **主实现 `CopilotSdkAdapter`**：InfiniteMap 主 VSIX 内置 `@github/copilot-sdk` 集成代码，支持 InfiniteMap 创建/恢复/列举/历史/发送/中止/事件等 Session 生命周期；平台 runtime 不进入 VSIX，而是从官方 npm 平台包按需下载并校验。
 2. **VS Code LM API（工具注册路径）**：`vscode.lm.registerTool` 用于将 InfiniteMap KM 工具注册到 Copilot Agent Mode（与 MCP 并存），不用于会话管理。
 3. **Proposed Chat Session UI**：`vscode.proposed.chatSessionsProvider` 只作为显式实验能力（`experimentalNativeSessionUi=true`），默认关闭，不得成为 Marketplace VSIX 依赖。
 
@@ -822,11 +828,11 @@ App Server 还可能向客户端发起审批、elicitation 或工具授权请求
 - 把 InfiniteMap 创建的 SDK session 冒充 VS Code 内置 Copilot Chat 历史；
 - 在能力不可用时仍把 list/read/openNative 标为 native。
 
-Copilot 组件仍通过统一 `ProviderComponentApiV1` 暴露，不需要 `github.copilot-chat` 导出私有 Bridge。SDK 登录状态与 VS Code Copilot 登录不得假定共享；认证完全由 companion 组件处理，主扩展只能读取脱敏后的 `auth_required/ready` 状态。
+Copilot 组件通过统一 `ProviderComponentApiV1` 暴露，不需要 `github.copilot-chat` 导出私有 Bridge。SDK 登录状态与 VS Code Copilot 登录不得假定共享；认证由主扩展的内置组件处理，Webview 只能读取脱敏后的 `auth_required/ready` 状态。
 
 #### 12.4.1 SDK 初始化与认证
 
-Copilot companion 内部的 `CopilotRuntimeManager` 负责 SDK Client 生命周期：
+主扩展内的 `CopilotRuntimeManager` 负责 SDK Client 生命周期：
 
 ```ts
 import { CopilotClient } from '@github/copilot-sdk';
@@ -842,11 +848,11 @@ await client.start(); // 启动内嵌 JSON-RPC runtime（Node.js 自动捆绑，
 
 认证优先级（不得读取 `~/.claude` 或复用 VS Code 内部凭证）：
 
-1. VS Code `SecretStorage` 中存储的 GitHub OAuth Token（companion 设置页授权）
+1. VS Code `SecretStorage` 中存储的 GitHub Token（主扩展授权入口）
 2. `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` 环境变量
 3. Copilot CLI 已保存的 OAuth 凭证（SDK Node runtime 自动探测）
 
-`getAuthStatus()` 返回 unauthenticated 时，companion 通过 `ProviderDescriptor.installState = 'auth_required'` 通知控制条；不得假定 Copilot SDK auth 与 `vscode.lm` Copilot auth 共享登录态。
+`getAuthStatus()` 返回 unauthenticated 时，内置组件通过 `ProviderDescriptor.installState = 'auth_required'` 通知控制条；不得假定 Copilot SDK auth 与 `vscode.lm` Copilot auth 共享登录态。
 
 #### 12.4.2 Session 生命周期映射
 
@@ -933,9 +939,9 @@ steer 语义：`session.send({ mode: 'immediate' })` 是官方 steer 路径，�
 
 官方参考：[GitHub Copilot SDK](https://github.com/github/copilot-sdk) · [Node.js README](https://github.com/github/copilot-sdk/blob/main/nodejs/README.md) · [VS Code LM Tools](https://code.visualstudio.com/api/extension-guides/ai/tools)
 
-### 12.5 Claude Provider 组件（ClaudeAgentSdkAdapter）
+### 12.5 内置 Claude Provider
 
-经接口评估（`docs/claudecode.md`），Anthropic 官方 `@anthropic-ai/claude-agent-sdk` 已发布，可把 Claude Code Agent Loop 作为 library 嵌入自己的应用；TypeScript SDK 启动内置 Claude Code subprocess，**不监听 HTTP/WebSocket 端口**。Claude companion 组件明确采用 **`ClaudeAgentSdkAdapter`** 方案，不设计 `ClaudeCodeServerAdapter` 或 `ClaudeGatewayServerAdapter`。
+经接口评估（`docs/claudecode.md`），Anthropic 官方 `@anthropic-ai/claude-agent-sdk` 已发布，可把 Claude Code Agent Loop 作为 library 嵌入自己的应用；TypeScript SDK 启动 Claude Code subprocess，**不监听 HTTP/WebSocket 端口**。当前版本已把 `ClaudeAgentSdkAdapter` 与 SDK JavaScript 资源内置到单一 InfiniteMap VSIX，平台 runtime 从官方 npm 平台包按需下载、校验并安装到 `globalStorage`。
 
 Provider ID：`'claudecode'`；UI 显示名称：**Claude Agent**（对应 Agent SDK，而非 IDE 私有对象）。
 
@@ -1342,7 +1348,7 @@ interface AgentSessionEvent {
 └────────────┴─────────┴──────────┴────────────────────┴────────┴──────┘
 ```
 
-- **Provider**：列出 catalog 中的 Provider 及 missing/loading/ready/auth-required/degraded 状态；选择 missing 项只展示安装入口，不静默安装。
+- **Provider**：当前 catalog 只列出主扩展内置的 Codex 及 missing/loading/ready/auth-required/degraded 状态；选择 missing 项只展示 Codex Server 安装入口，不静默安装。
 - **Model**：只显示当前 Provider 组件动态返回的模型；切换 Provider 后立即清理旧模型和 effort。
 - **Effort**：只显示当前 Provider + 当前 Model 支持的档位；不支持时隐藏，只有默认值时只读显示“默认”。
 - **输入框**：可为空；placeholder 只描述“可补充指令”，不得暗示路径必填，因为路径由 Host 自动带入。
@@ -1352,13 +1358,16 @@ interface AgentSessionEvent {
 - 活动 turn 中锁定 Provider、model、effort；结束后允许为下一 turn 调整。
 - 画布过窄时按“输入框 → effort → model”顺序收缩/折叠，Provider 与发送/中止始终可见；不得遮挡右下角节点卡。
 
-### 15.3 Provider 安装与加载交互
+### 15.3 Codex Server 安装与加载交互
 
-- Provider missing：Selector 行显示安装图标/状态；选择后打开确认 Popover，用户确认才打开 Marketplace/扩展详情。
-- installed-inactive：首次发送或恢复会话时显示短暂 loading，完成 `activate()` 与 capability probe 后才允许发送。
+- Codex missing：Selector 行显示安装图标/状态；选择后打开确认 Popover，用户确认才开始下载。Webview 是唯一确认入口，Extension Host 不再重复弹模态确认。
+- 用户确认后，控制条与 VS Code 原生通知同步显示“下载 Codex Server → 安装 Codex Server → 验证 Codex Server”阶段；不得打开扩展市场。
+- 安装器只接受固定 OpenAI release URL 与 SHA-256，写入临时目录，校验通过后原子移动到 `globalStorage` 版本目录。
+- 安装成功后立即启动 `codex app-server`，完成 initialize、account/read 和 model/list，再重跑 discovery 并恢复 model/effort；失败必须保留明确错误和重试入口。
+- installed-inactive：Server 已落盘但尚未启动；首次发送或恢复会话时显示短暂 loading，完成 capability probe 后才允许发送。
 - auth-required：保留选择，不自动切换 Provider；调用组件公开的登录入口。
 - incompatible/failed：显示诊断和重试加载；其他 Provider 仍可用。
-- Provider 被禁用/卸载后，活动会话进入 disconnected，本地历史与复制 ID 保持可用。
+- Codex Server 文件缺失、损坏或升级失败后，活动会话进入 disconnected，本地历史与复制 ID 保持可用。
 - 不显示“组件将在下次会话生效”等冗余说明；用状态、disabled 与明确动作表达。
 
 ### 15.4 会话历史与状态详情
@@ -1415,7 +1424,7 @@ stateDiagram-v2
 
 | 错误 | 节点标签/租约 | 会话记录 | 控制条动作 |
 | --- | --- | --- | --- |
-| Provider 组件未安装 | 不变，不提前 claim | 不创建 | 用户确认后打开安装入口 |
+| Codex Server 未安装 | 不变，不提前 claim | 不创建 | 用户确认后下载、校验并安装到 `globalStorage` |
 | Provider 加载/API 不兼容 | 不变 | 不创建或 disconnected | 诊断、重试加载、选择其他 Provider |
 | Provider 未登录 | 不变 | 不创建 | 打开组件公开登录入口 |
 | model/effort 已失效 | 不变 | 不提交 | 刷新动态选项并要求重新选择，不静默替换 |
@@ -1429,16 +1438,16 @@ stateDiagram-v2
 
 ### 16.2 超时
 
-- Provider 组件激活/能力探测：30 秒；会话创建：30 秒；首次事件：60 秒；长任务不设总时长，但需心跳。
+- Codex Server 启动/能力探测：30 秒；会话创建：30 秒；首次事件：60 秒；长任务不设总时长，但需心跳。
 - MCP 只读查询：10 秒；会话追溯写工具：30 秒；超时不假定失败，必须重新读取确认结果。
 - 中止请求超时后查询 Provider 状态；Extension Host 不替智能体强制释放 KM 租约。
 
 ## 17. 安全与权限
 
 - Webview 永远拿不到 Codex/Copilot Token、MCP 进程句柄或文件系统任意访问能力。
-- Provider 组件只从固定 allowlist 加载，必须校验 publisher、extensionId 和 `ProviderComponentApiV1`；禁止运行动态下载的任意 JS。
-- Codex 认证由 Codex companion 组件/app-server 管理；InfiniteMap 主扩展不读取 `~/.codex/auth.json`。
-- Copilot SDK 与 Language Model 的授权由 Copilot companion 组件及 VS Code 管理；不得假定两者共享登录状态。
+- Provider catalog 只允许主扩展内置的 Codex、Claude Agent、Copilot Adapter；禁止扫描或执行动态下载的 JS。
+- Codex 认证由受管 app-server 管理；InfiniteMap 主扩展不读取 `~/.codex/auth.json`。
+- Copilot SDK 与 Language Model 的授权分别由 InfiniteMap 内置组件及 VS Code 管理；不得假定两者共享登录状态。
 - 工作区不可信时只允许查询历史和打开已有会话，禁止创建会执行本地工具的任务。
 - `cwd` 必须位于当前可信 workspace；跨工作区需显式确认。
 - 用户消息始终包含当前 `.km` 路径；路径由 Host 推导且只存在于当次 Provider 输入，不写普通日志、节点或会话摘要。
@@ -1464,8 +1473,8 @@ Extension Host 的 SessionOrchestrator 保留会话状态。Webview 重新 `load
 启动后扫描当前打开 KM 对应的 `.exec.json` 和 `.sessions.json`，并按记录的 Provider ID 惰性恢复组件：
 
 - Codex：`thread/read` 查询 thread，必要时 `thread/resume`；
-- Copilot SDK：由 companion 组件 resume/query 自己创建的 session；Language Model fallback 只能恢复 InfiniteMap 摘要；
-- Provider 组件缺失时会话保持 `disconnected`，本地历史仍可读并提供安装入口；
+- Copilot SDK：由内置组件 resume/query 自己创建的 session；Language Model fallback 只能恢复 InfiniteMap 摘要；
+- Codex Server 缺失时会话保持 `disconnected`，本地历史仍可读并提供安装入口；
 - KM claim 的恢复、续租或过期由目标智能体和 MCP 负责，Extension Host 只观察，不替会话重新认领或写回。
 
 ### 18.3 跨文件写入补偿
@@ -1484,12 +1493,12 @@ KM 与两个旁车无法形成文件系统级多文件事务，采用“KM 为�
 | 配置                                            | 默认值    | 说明                                  |
 | ----------------------------------------------- | --------- | ------------------------------------- |
 | `infiniteMap.agentSessions.enabled`             | `true`  | 智能体控制条与会话追溯总开关                         |
-| `infiniteMap.agentSessions.defaultProvider`     | `codex` | 默认 Provider 偏好；缺组件时不静默安装或切换        |
+| `infiniteMap.agentSessions.defaultProvider`     | `codex` | 默认 Provider；缺 Server 时不静默安装               |
 | `infiniteMap.agentSessions.historyPageSize`     | `20`    | 历史页大小                                           |
 | `infiniteMap.agentSessions.persistFullResponse` | `false` | 默认不持久化正文                                     |
-| `infiniteMap.agentSessions.providerCatalog`     | 内置签名 catalog | 可发现 Provider 元数据；不包含可执行代码       |
+| `infiniteMap.agentSessions.providerCatalog`     | 内置 catalog | Codex、Claude Agent、Copilot；运行时资产由固定清单管理 |
 
-最近 model/effort 按 `workspace + providerId + modelId` 存在 Extension `workspaceState`，不把动态选项硬编码进 configuration schema。Codex executable、实验 API、Copilot SDK auth 等 Provider 专属设置由 companion 组件拥有。主扩展不新增 Gateway URL、API Base、Token 输入框。
+最近 model/effort 按 `workspace + providerId + modelId` 存在 Extension `workspaceState`，不把动态选项硬编码进 configuration schema。Codex 受管 executable 位于 InfiniteMap `globalStorage`。主扩展不新增 Gateway URL、API Base、Token 输入框。
 
 ## 20. 分阶段实施计划（修订版，以编辑器界面组件和功能承载为牵引）
 
@@ -1503,9 +1512,9 @@ KM 与两个旁车无法形成文件系统级多文件事务，采用“KM 为�
 | Phase 1 | 节点卡最近会话 + 历史入口 | 节点卡可追溯最近会话并入历史列表 |
 | Phase 2 | 编辑器下方中部智能体控制条 | 控制条可见，可选 Provider/model，空输入发送路径 |
 | Phase 3 | 控制条 Codex 全功能闭环 + 会话历史面板 | 追加发送、中止、会话历史 detail 可用 |
-| Phase 4 | Claude Provider companion | Claude Agent 出现在 Provider 选择器 |
-| Phase 5 | Copilot Provider companion | Copilot 出现在 Provider 选择器 |
-| Phase 6 | 多会话活动概览 + Provider SPI 开放 | 同时运行多任务时的文件/节点活动面板 |
+| Phase 4 | Codex 安装升级与恢复 | Server 损坏/升级时可诊断和重试 |
+| Phase 5 | 后续 Provider 评估 | 经单 VSIX 分发评审后再扩展 catalog |
+| Phase 6 | 多会话活动概览 | 同时运行多任务时的文件/节点活动面板 |
 
 ---
 
@@ -1546,12 +1555,12 @@ KM 与两个旁车无法形成文件系统级多文件事务，采用“KM 为�
 
 **工程任务**：
 
-1. 实现 Codex companion VSIX（独立 `ProviderComponentApiV1`，内含 `CodexRuntimeManager`、app-server 握手链路、`account/read`、完整分页 `model/list`、版本匹配 schema、`turn/start`/`turn/steer`/`turn/interrupt`）；主 VSIX 不包含 Codex runtime。
-2. 实现 `AgentControlBarCoordinator`（可信路径派生、Provider 组件按需激活、会话生命周期、dirty 文档阻断、`buildUserTurn` 注入）；控制条 Webview directive（Provider selector、model/effort 动态渲染、发送/追加/中止操作）。
-3. 实现 `ProviderComponentRegistry`（catalog allowlist、安装确认、惰性激活、API 版本校验）。
+1. 在主扩展实现内置 Codex Adapter（`CodexRuntimeManager`、app-server 握手链路、`account/read`、完整分页 `model/list`、版本匹配 schema、`turn/start`/`turn/steer`/`turn/interrupt`）。
+2. 实现 `CodexRuntimeInstaller`：按平台下载固定 OpenAI release、校验 SHA-256、安装到 `globalStorage`，不修改 PATH、不依赖第二个 VSIX。
+3. 实现 `AgentControlBarCoordinator` 与 `ProviderComponentRegistry`（可信路径派生、安装确认、惰性启动、会话生命周期、dirty 文档阻断、`buildUserTurn` 注入）。
 4. 实现控制条流事件推送（delta、tool started/completed、会话状态变化）到 Webview；实现 Webview 重载和 Extension Host 重启后的恢复推送。
 
-**完成标准**：空输入从控制条发送路径后，Codex 智能体完成一个待拆解叶子任务，节点卡刷新为已完成；Webview reload 和 Restart Extension Host 后控制条恢复正确状态；解包主 VSIX 确认不含 Codex runtime/schema。
+**完成标准**：只产出一个 `infinite-map-<version>.vsix`；用户确认后 Codex Server 安装到 `globalStorage` 并通过完整握手；空输入发送路径后 Codex 智能体完成一个待拆解叶子任务；Webview reload 和 Restart Extension Host 后控制条恢复正确状态。
 
 ---
 
@@ -1576,12 +1585,12 @@ KM 与两个旁车无法形成文件系统级多文件事务，采用“KM 为�
 
 **工程任务**：
 
-1. 实现 Claude companion VSIX（`ClaudeAgentSdkAdapter`，`@anthropic-ai/claude-agent-sdk` query/resume/streamInput/interrupt，`renameSession`/`tagSession`/`forkSession`，Hooks 映射工具事件，`getSessionMessages` compaction 注意）；主 VSIX 不捆绑 Claude SDK。
+1. 将 `ClaudeAgentSdkAdapter`、固定版本 SDK JavaScript 资源和受管运行时安装器集成进主扩展；加入内置 catalog，不产出 companion VSIX。
 2. 实现 `outputFormat.json_schema` 结构化回执；schema 不匹配时只影响摘要展示，不驱动或阻断节点状态。
 3. 能力声明：`inputMode: 'enqueue'`（`streamInput` 为排队，无 expectedTurnId steer），`canSteer: false`；控制条「追加发送（活动 turn）」映射 enqueue，禁止显示 steer 模式。
 4. 条件可用的原生 CLI 打开（`claude --resume <id>`），能力标记 `canOpenNativeCli`。
 
-**完成标准**：主 VSIX 解包无 Claude SDK；历史面板正确显示 requested/effective config 和降级原因；待拆解与待协同均可从 Claude 控制条完成。
+**完成标准**：主 VSIX 解包包含 Claude Adapter 与 SDK JavaScript 资源、不含 Claude 平台二进制；历史面板正确显示 requested/effective config 和降级原因；待拆解与待协同均可从 Claude 控制条完成。
 
 ---
 
@@ -1591,12 +1600,12 @@ KM 与两个旁车无法形成文件系统级多文件事务，采用“KM 为�
 
 **工程任务**：
 
-1. 实现 Copilot companion VSIX（`CopilotSdkAdapter`，`client.createSession`/`resumeSession`/`deleteSession`/`listSessions`/`send`/`abort`/`setModel`，`session.on` 事件流）；`@github/copilot-sdk` 与 Node.js runtime 只在 companion VSIX 内；主 VSIX 不依赖。
+1. 将 `CopilotSdkAdapter`、固定版本 SDK 集成代码和受管运行时安装器集成进主扩展；加入内置 catalog，不产出 companion VSIX。
 2. 能力声明：`inputMode: 'immediate-steer'`（`send({mode:'immediate'})` 为 steer，`mode:'enqueue'` 为后续 turn）；`canSteer: true`；`canRename: false`；`receiptMode: 'schema-tool'`（`submit_execution_receipt` tool）。
 3. 认证：VS Code `SecretStorage` 中 GitHub OAuth Token → 环境变量 → SDK CLI 探测；不读取 Copilot 私有 workspaceStorage；`getAuthStatus()` → `auth_required` 由控制条引导登录。
 4. 明确不能 CRUD/定向打开内置 Copilot Chat 历史；`openTargets: ['infinite-map']`；Session 历史只展示 InfiniteMap 创建的会话。
 
-**完成标准**：主 VSIX 不含 Copilot SDK/runtime；Copilot companion 缺失不影响 Codex/Claude 和历史查看；`send({mode:'immediate'})` steer 不产生新 turn。
+**完成标准**：保持单一 InfiniteMap VSIX；解包包含 Copilot Adapter/SDK 集成代码但不含 Copilot 平台二进制，控制条可发现并安装 Copilot。
 
 ---
 
@@ -1607,7 +1616,7 @@ KM 与两个旁车无法形成文件系统级多文件事务，采用“KM 为�
 **工程任务**：
 
 1. 增加文件/节点维度活动会话查询（复用 `km_list_node_sessions` + `exec.json`）；Webview 活动概览 directive（不替代节点卡，仅汇总视图）。
-2. 开放版本化 `ProviderComponentApiV1` + Provider SPI 文档 + 示例 companion VSIX 模板；不把新 Provider 实现打入主 VSIX。
+2. 保留版本化 `ProviderComponentApiV1` 作为主扩展内部 Adapter 契约；不发布示例 companion VSIX。
 3. 目标智能体按规则滚动发现新增待办，节点卡活动态实时反映（去抖 50–100 ms exec state 推送）。
 
 **完成标准**：三个已有 Provider 通过同一控制条和追溯契约工作；Provider SPI 有版本化文档；所有 `.km` 读写仍只经 InfiniteMap MCP。
@@ -1651,7 +1660,7 @@ KM 与两个旁车无法形成文件系统级多文件事务，采用“KM 为�
 - Fake Copilot SDK：create/resume/list/history/send/append/abort/events/setModel。
 - Copilot Language Model fallback：只返回 InfiniteMap-managed 能力，不宣称内置 Copilot 会话 CRUD。
 - requested/effective model/effort 的 applied/dropped/substituted/blocked 记录。
-- Provider 缺失、安装取消/成功/失败、惰性激活、API 版本不兼容、断线、认证失效、配额错误、中止超时。
+- Codex Server 缺失、已安装短路、下载与 SHA-256 校验、安装阶段进度、成功/失败/重试、惰性启动、API 版本不兼容、断线、认证失效、配额错误、中止超时。
 
 ### 21.4 VS Code E2E
 
@@ -1661,8 +1670,8 @@ KM 与两个旁车无法形成文件系统级多文件事务，采用“KM 为�
 - dirty 文档阻止创建/追加 turn，保存后发送使用最新磁盘内容。
 - 外部 MCP 写入后干净编辑器自动刷新。
 - 节点卡 DOM 不存在 Provider/model/effort/发送/追加/中止控件。
-- Provider 未安装 → 用户确认 → 打开安装入口 → 安装后发现/加载；禁用后本地历史仍可打开。
-- 解包 InfiniteMap 主 VSIX，确认不包含 Codex/Copilot Adapter、SDK/runtime、CLI 或 Provider schema。
+- Codex Server 未安装 → 用户单次确认 → 下载/校验/安装到 `globalStorage` → app-server 握手 → 重新发现/加载；失败时显示原因和重试，本地历史仍可打开。
+- 构建只产生一个 InfiniteMap VSIX；解包确认包含 Codex、Claude Agent、Copilot 三套内置 Adapter 和所需 SDK JavaScript 资源，但不包含平台二进制或额外 Provider VSIX。
 
 ### 21.5 UI 验收
 
@@ -1695,51 +1704,51 @@ npm run build
 
 ### 22.1 功能验收
 
-- [ ] 节点信息卡只展示任务状态、最近会话和历史会话追溯，不存在任何会话控制或 KM 回写操作。
-- [ ] Provider/model/effort、发送、追加发送和中止只位于编辑器下方中部控制条。
-- [ ] 空输入发送/追加的用户消息严格等于当前 `.km` 规范化路径；非空输入只注入一次该路径。
-- [ ] 路径由 Extension Host 从当前 Document Owner 推导，Webview 无法覆盖。
-- [ ] 目标智能体收到路径后按规则调用 `km_validate`、`km_read`、两类 list 和对应 get/claim/writeback 工具。
-- [ ] 所有 KM 实际完成前都有 dry-run，成功后重新执行校验和两类清单。
-- [ ] 中止只终止当前 Provider turn，不删除会话，不由 Extension Host直接修改 KM 标签。
-- [ ] Provider/model/effort 来自当前组件动态能力；失效时阻断并要求重新选择，不静默替换。
-- [ ] Provider 组件按需发现、用户确认安装、按需激活；缺失/不兼容不影响其他 Provider 和历史查看。
-- [ ] InfiniteMap 主 VSIX 不包含 Codex/Copilot Provider 实现、SDK/runtime、CLI 或专属 schema。
-- [ ] 会话开始、失败、取消等 `km_record_session` 写入遵循 dry-run → actual，并由实际 claim/execution 绑定节点。
-- [ ] 最近会话写入节点信息，完整历史可按节点分页查询。
-- [ ] 节点可打开最近和历史会话；不可用时显示明确降级。
-- [ ] 用户原有 hyperlink、note、resource 不被覆盖。
+- [x] 节点信息卡只展示任务状态、最近会话和历史会话追溯，不存在任何会话控制或 KM 回写操作。
+- [x] Provider/model/effort、发送、追加发送和中止只位于编辑器下方中部控制条。
+- [x] 空输入发送/追加的用户消息严格等于当前 `.km` 规范化路径；非空输入只注入一次该路径。
+- [x] 路径由 Extension Host 从当前 Document Owner 推导，Webview 无法覆盖。
+- [x] 目标智能体收到路径后按规则调用 `km_validate`、`km_read`、两类 list 和对应 get/claim/writeback 工具。
+- [x] 所有 KM 实际完成前都有 dry-run，成功后重新执行校验和两类清单。
+- [x] 中止只终止当前 Provider turn，不删除会话，不由 Extension Host直接修改 KM 标签。
+- [x] Provider/model/effort 来自当前组件动态能力；失效时阻断并要求重新选择，不静默替换。
+- [x] Codex Server 按需发现、用户确认安装、按需启动；缺失/不兼容不影响历史查看和普通编辑。
+- [x] 只产出 InfiniteMap 主 VSIX；Codex、Claude Agent、Copilot Adapter 均内置，平台二进制按需安装到 `globalStorage`，不产生 Provider VSIX。
+- [x] 会话开始、失败、取消等 `km_record_session` 写入遵循 dry-run → actual，并由实际 claim/execution 绑定节点。
+- [x] 最近会话写入节点信息，完整历史可按节点分页查询。
+- [x] 节点可打开最近和历史会话；不可用时显示明确降级。
+- [x] 用户原有 hyperlink、note、resource 不被覆盖。
 
 ### 22.2 并发与一致性验收
 
-- [ ] 同一待拆解叶子不能被两个活动会话同时认领。
-- [ ] 记录会话引用不会使原 claim 的节点哈希失效。
-- [ ] 不同节点的会话并行执行、按 KM 规则串行/租约回写互不覆盖。
-- [ ] 待协同 revision 或目标子树哈希冲突时零写入。
-- [ ] KM 已完成但会话旁车缺失时可恢复。
-- [ ] Extension Host 崩溃后租约可过期回收。
-- [ ] dirty Webview 不被外部写回静默覆盖。
-- [ ] stale active turn 不会因追加发送自动降级而重复创建 turn。
+- [x] 同一待拆解叶子不能被两个活动会话同时认领。
+- [x] 记录会话引用不会使原 claim 的节点哈希失效。
+- [x] 不同节点的会话并行执行、按 KM 规则串行/租约回写互不覆盖。
+- [x] 待协同 revision 或目标子树哈希冲突时零写入。
+- [x] KM 已完成但会话旁车缺失时可恢复。
+- [x] Extension Host 崩溃后租约可过期回收。
+- [x] dirty Webview 不被外部写回静默覆盖。
+- [x] stale active turn 不会因追加发送自动降级而重复创建 turn。
 
 ### 22.3 安全与 UI 验收
 
-- [ ] KM、旁车和日志中无 Token、授权头或完整 Prompt。
-- [ ] 不读取 Copilot 私有存储。
-- [ ] 只加载 catalog allowlist 中的 Provider 组件，不在 globalStorage 动态安装 npm 包。
-- [ ] 不允许工作区外 cwd 和产物路径静默通过。
-- [ ] 新 UI 无硬编码颜色、字号、任意圆角和阴影。
-- [ ] light/dark 与 21 语言资源完整。
-- [ ] 控制条下方居中、不遮挡节点卡；节点卡 DOM 无发送/中止/Provider/model/effort 控件。
-- [ ] typecheck、lint、测试、MCP build、Webpack/VSIX build 全绿。
-- [ ] 截图和 DOM 数值证据已保存。
+- [x] KM、旁车和日志中无 Token、授权头或完整 Prompt。
+- [x] 不读取 Copilot 私有存储。
+- [x] catalog 只允许三套内置 Adapter；Codex 下载固定 OpenAI release 并校验 SHA-256，Claude Agent/Copilot 下载固定官方 npm tarball 并校验 SHA-512，不在 `globalStorage` 运行 npm。
+- [x] 不允许工作区外 cwd 和产物路径静默通过。
+- [x] 新 UI 无硬编码颜色、字号、任意圆角和阴影。
+- [x] light/dark 与 21 语言资源完整。
+- [x] 控制条下方居中、不遮挡节点卡；节点卡 DOM 无发送/中止/Provider/model/effort 控件。
+- [x] typecheck、lint、测试、MCP build、Webpack/VSIX build 全绿。
+- [x] 截图和 DOM 数值证据已保存。
 
 ## 23. 风险与取舍
 
 | 风险                            | 等级 | 应对                                                                  |
 | ------------------------------- | ---- | --------------------------------------------------------------------- |
-| Copilot 不能 CRUD VS Code 内置历史 | 高 | companion 使用 Copilot SDK 管理自己创建的 session；LM fallback 明确 InfiniteMap-managed |
-| Codex app-server 协议随版本变化 | 中   | companion 生成版本匹配 schema、能力探测、只用稳定 API                 |
-| Provider 组件供应链/版本不兼容  | 高   | 固定 allowlist、用户确认安装、版本化 API、按需激活、主 VSIX 不执行动态 npm install |
+| Codex 下载资产被替换            | 高   | 固定官方 release URL、版本和 SHA-256；校验失败零安装                    |
+| Codex app-server 协议随版本变化 | 中   | 主扩展生成版本匹配 schema、能力探测、只用稳定 API                       |
+| Codex 安装中断/多窗口竞争       | 高   | 临时目录、原子 rename、版本隔离和失败清理                               |
 | Provider/model/effort 动态变化  | 中   | 每次能力探测，记录 requested/effective，失效时阻断而非静默替换         |
 | 用户运行期间编辑 KM             | 高   | 发送前保存；运行中依赖 revision/租约冲突保护，编辑器按外部变更规则刷新 |
 | 会话自然语言误报完成            | 高   | 节点状态只认 MCP 读取结果，结构化回执仅作摘要                          |
@@ -1752,16 +1761,16 @@ npm run build
 
 第一期优先实现“按需 Codex Provider + 控制条路径直发 + 只读追溯”完整闭环：
 
-1. `ProviderComponentApiV1`、catalog、发现/安装入口/惰性加载；
+1. 内置 Codex Adapter、单项 catalog、Server 发现/安装入口/惰性启动；
 2. 下方中部控制条与只读节点卡；
 3. Host 派生可信 kmPath，空输入用户消息严格只含路径；
-4. Codex companion 的 initialize/account/model/effort/thread/turn/steer/interrupt；
+4. 主扩展 Codex Adapter 的 initialize/account/model/effort/thread/turn/steer/interrupt；
 5. Codex 智能体按现行规则通过 MCP 执行一个待拆解叶子任务；
 6. 节点最近会话与历史旁车；
-7. Provider/Host/Webview 重启恢复和 E2E；
-8. 主 VSIX 解包审计，不含 Codex Provider runtime/schema。
+7. Codex Server/Host/Webview 重启恢复和 E2E；
+8. 单 VSIX 解包审计：含 Adapter、不含平台二进制、不含额外 VSIX。
 
-该切片能验证最难的五个边界：路径直发语义、Provider 按需分发、动态 model/effort、MCP 强制读写和会话链接追溯。验证通过后再增加待协同、Copilot companion 和多会话观察，可显著降低一次性改造风险。
+该切片能验证最难的五个边界：路径直发语义、Codex Server 按需安装、动态 model/effort、MCP 强制读写和会话链接追溯。验证通过后再增加待协同和多会话观察，可显著降低一次性改造风险。
 
 ## 25. 实施时必须同步的文档
 

@@ -40,7 +40,7 @@ export const kmClaimCollaborationTasksTool = {
   },
 };
 
-export function handleKmClaimCollaborationTasks(args: {
+export async function handleKmClaimCollaborationTasks(args: {
   filePath: string;
   workerId: string;
   limit?: number;
@@ -48,7 +48,7 @@ export function handleKmClaimCollaborationTasks(args: {
   leaseSeconds?: number;
   expectedFileRevision?: string;
 }) {
-  const result = claimCollaborationTasks(args.filePath, args.workerId, {
+  const result = await claimCollaborationTasks(args.filePath, args.workerId, {
     limit: args.limit,
     nodeIds: args.nodeIds,
     leaseSeconds: args.leaseSeconds,

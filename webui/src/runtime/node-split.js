@@ -16,6 +16,7 @@ define(function(require, exports, module) {
         function report(key) {
             window.vscode.postMessage({
                 command: 'errormsg',
+				protocolVersion: window.infiniteMapProtocolVersion,
                 content: lang(key, 'runtime/nodeSplit')
             });
         }
@@ -51,6 +52,7 @@ define(function(require, exports, module) {
             };
             window.vscode.postMessage({
                 command: 'splitNode',
+				protocolVersion: window.infiniteMapProtocolVersion,
                 requestId: requestId,
                 nodeText: node.getText(),
                 isRoot: node.isRoot(),
@@ -92,7 +94,7 @@ define(function(require, exports, module) {
         }
 
         window.addEventListener('message', function(event) {
-            if (event.data && event.data.command === 'splitNodeResult') {
+            if (event.data && event.data.protocolVersion === window.infiniteMapProtocolVersion && event.data.command === 'splitNodeResult') {
                 handleResult(event.data);
             }
         });

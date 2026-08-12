@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "id": "codex",
+      "displayName": "Codex",
+      "extensionId": "chanterxiao.infinite-map",
+      "publisher": "chanterxiao",
+      "apiVersion": "1"
+    },
+    {
+      "id": "claudecode",
+      "displayName": "Claude Agent",
+      "extensionId": "chanterxiao.infinite-map",
+      "publisher": "chanterxiao",
+      "apiVersion": "1"
+    },
+    {
+      "id": "copilot",
+      "displayName": "Copilot",
+      "extensionId": "chanterxiao.infinite-map",
+      "publisher": "chanterxiao",
+      "apiVersion": "1"
+    }
+  ]
+}

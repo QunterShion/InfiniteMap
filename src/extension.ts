@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { MindEditorProvider } from './mindEditor';
 import { extensionHostSessionId, logLifecycle, setLifecycleOutputChannel } from './lifecycle';
+import { SessionUriHandler } from './deepLinks/sessionUriHandler';
 
 export function activate(context: vscode.ExtensionContext) {
 	const lifecycleOutput = vscode.window.createOutputChannel('InfiniteMap Lifecycle');
@@ -11,6 +12,7 @@ export function activate(context: vscode.ExtensionContext) {
 		activationEvent: 'onCustomEditor:infinite-map.editor',
 	});
 	try {
+		context.subscriptions.push(vscode.window.registerUriHandler(new SessionUriHandler(context.extensionPath)));
 		context.subscriptions.push(MindEditorProvider.register(context, extensionHostSessionId));
 		logLifecycle('extension.activate.providerRegistered', {
 			viewType: 'infinite-map.editor',

@@ -3,12 +3,12 @@
  */
 import { getCollaborationContext } from '../services/kmFileReader';
 
-export function handleKmGetCollaborationContext(args: {
+export async function handleKmGetCollaborationContext(args: {
   filePath: string;
   nodeId: string;
   siblingLimit?: number;
 }) {
-  const result = getCollaborationContext(
+  const result = await getCollaborationContext(
     args.filePath,
     args.nodeId,
     args.siblingLimit ?? 8

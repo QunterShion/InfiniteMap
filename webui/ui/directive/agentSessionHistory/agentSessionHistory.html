@@ -1,0 +1,48 @@
+<aside data-component="agent-session-history" ng-if="history.visible"
+       aria-label="{{ 'history' | agentSessionText }}">
+    <header data-slot="history-header">
+        <div data-slot="history-heading">
+            <div data-slot="history-title">{{ 'history' | agentSessionText }}</div>
+            <div data-slot="history-meta">{{ history.total }} {{ 'records' | agentSessionText }}</div>
+        </div>
+        <button data-slot="button close-button" type="button" ng-click="closeHistory()"
+                aria-label="{{ 'close' | agentSessionText }}">{{ 'close' | agentSessionText }}</button>
+    </header>
+    <div data-slot="notice" ng-if="history.orphan">{{ 'orphan' | agentSessionText }}</div>
+    <div data-slot="notice" ng-if="history.loading">{{ 'loading' | agentSessionText }}</div>
+    <div data-slot="error" ng-if="history.error">{{ history.error }}</div>
+    <div data-slot="empty" ng-if="!history.loading && !history.error && !history.sessions.length">
+        {{ 'noSessions' | agentSessionText }}
+    </div>
+    <ol data-slot="history-list" ng-if="history.sessions.length">
+        <li data-slot="history-item" ng-repeat="session in history.sessions track by session.executionId">
+            <a href="" data-slot="history-link" ng-click="$event.preventDefault(); openSession(session)">
+                {{ session.session.provider }} · {{ session.session.modelId || ('defaultEffort' | agentSessionText) }}
+            </a>
+            <div data-slot="history-config">
+                <span>{{ session.status }}</span>
+                <span ng-if="session.session.effort"> · {{ session.session.effort }}</span>
+                <span> · {{ session.updatedAt | date:'yyyy-MM-dd HH:mm:ss' }}</span>
+            </div>
+            <dl data-slot="config-comparison" ng-if="session.requestedConfig || session.effectiveConfig">
+                <dt>{{ 'requested' | agentSessionText }}</dt>
+                <dd>{{ session.requestedConfig.modelId || session.session.modelId }} · {{ session.requestedConfig.effort || ('defaultEffort' | agentSessionText) }}</dd>
+                <dt>{{ 'effective' | agentSessionText }}</dt>
+                <dd>{{ session.effectiveConfig.modelId || session.session.modelId }} · {{ session.effectiveConfig.effort || ('defaultEffort' | agentSessionText) }}</dd>
+            </dl>
+            <div data-slot="history-summary" ng-if="session.summary">{{ session.summary }}</div>
+            <div data-slot="history-error" ng-if="session.error">{{ session.error.code }} · {{ session.error.message }}</div>
+            <div data-slot="artifact-section" ng-if="session.artifacts.length">
+                <div data-slot="artifact-title">{{ 'artifacts' | agentSessionText }}</div>
+                <ul data-slot="artifact-list">
+                    <li ng-repeat="artifact in session.artifacts track by $index">{{ artifact.kind }} · {{ artifact.path }}</li>
+                </ul>
+            </div>
+            <button data-slot="button copy-button" type="button" ng-click="copySessionId(session)">
+                {{ history.copiedExecutionId === session.executionId ? ('copyDone' | agentSessionText) : ('copySessionId' | agentSessionText) }}
+            </button>
+        </li>
+    </ol>
+    <button data-slot="button load-more-button" type="button" ng-if="history.nextCursor"
+            ng-disabled="history.loading" ng-click="loadMoreSessions()">{{ 'loadMore' | agentSessionText }}</button>
+</aside>

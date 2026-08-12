@@ -74,12 +74,12 @@ test('returns root path, subtree, and bounded sibling context', (t) => {
   assert.equal(context.siblings.length, 1);
 });
 
-test('dry-runs then appends unlabeled children and completes the parent', (t) => {
+test('dry-runs then appends unlabeled children and completes the parent', async (t) => {
   const filePath = createFixture(t);
   const context = getCollaborationContext(filePath, 'target');
   const before = fs.readFileSync(filePath, 'utf8');
 
-  const dryRun = expandCollaborationTask(
+  const dryRun = await expandCollaborationTask(
     filePath,
     'target',
     context.fileRevision,
@@ -89,7 +89,7 @@ test('dry-runs then appends unlabeled children and completes the parent', (t) =>
   assert.equal(dryRun.appendedCount, 2);
   assert.equal(fs.readFileSync(filePath, 'utf8'), before);
 
-  const result = expandCollaborationTask(
+  const result = await expandCollaborationTask(
     filePath,
     'target',
     context.fileRevision,
@@ -114,15 +114,15 @@ test('dry-runs then appends unlabeled children and completes the parent', (t) =>
   );
 });
 
-test('rejects collaboration writes based on a stale file revision', (t) => {
+test('rejects collaboration writes based on a stale file revision', async (t) => {
   const filePath = createFixture(t);
   const context = getCollaborationContext(filePath, 'target');
   const document = readKmFile(filePath);
   document.root.data.text = 'changed root';
   fs.writeFileSync(filePath, JSON.stringify(document, null, 2), 'utf8');
 
-  assert.throws(
-    () => expandCollaborationTask(
+  await assert.rejects(
+    expandCollaborationTask(
       filePath,
       'target',
       context.fileRevision,

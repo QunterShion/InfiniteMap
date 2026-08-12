@@ -1,0 +1,476 @@
+import { randomUUID } from 'crypto';
+import { CopilotSession, ModelInfo, PermissionRequest, SessionConfig } from '@github/copilot-sdk';
+import * as vscode from 'vscode';
+import {
+	AgentSessionAdapter,
+	AgentSessionEventPayload,
+	AgentSessionRef,
+	AppendSessionInput,
+	CreateSessionInput,
+	InterruptTurnInput,
+	OpenSessionInput,
+	ProviderDescriptor,
+	ProviderModelOption,
+	QuerySessionInput,
+	RespondToInputInput,
+	SendSessionInput,
+	SessionCapabilities,
+	SessionMutationInput,
+	SessionSnapshot,
+} from '../../sessions/types';
+import { INFINITE_MAP_CONTROL_INSTRUCTIONS } from '../codex/protocol';
+import { CopilotRuntimeManager, CopilotRuntimeProbe } from './CopilotRuntimeManager';
+
+const PROVIDER_ID = 'copilot';
+const EXTENSION_ID = 'chanterxiao.infinite-map';
+export const COPILOT_GITHUB_TOKEN_SECRET = 'infiniteMap.copilotGithubToken';
+
+interface CopilotSessionState {
+	executionId: string;
+	session: AgentSessionRef;
+	sdkSession: CopilotSession;
+	workingDirectory: string;
+	mcpServer: { command: string; args: string[] };
+	status: SessionSnapshot['status'];
+	sequence: number;
+	updatedAt: string;
+	activeTurnId?: string;
+	unsubscribers: Array<() => void>;
+}
+
+interface PendingInput {
+	sessionId: string;
+	kind: 'approval' | 'question';
+	resolve(value: unknown): void;
+	timer: NodeJS.Timeout;
+}
+
+export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
+	public readonly providerId = PROVIDER_ID;
+	private readonly eventEmitter = new vscode.EventEmitter<AgentSessionEventPayload>();
+	private readonly sessions = new Map<string, CopilotSessionState>();
+	private readonly pendingInputs = new Map<string, PendingInput>();
+
+	constructor(private readonly runtime: CopilotRuntimeManager) {}
+
+	public async getDescriptor(): Promise<ProviderDescriptor> {
+		try {
+			const probe = await this.runtime.ensureProbe();
+			return {
+				id: PROVIDER_ID,
+				displayName: 'Copilot',
+				componentExtensionId: EXTENSION_ID,
+				installState: probe.authenticated ? 'ready' : 'auth_required',
+				models: this.toModelOptions(probe.models),
+				capabilities: this.capabilities(probe.authenticated ? 'ready' : 'auth_required'),
+			};
+		} catch {
+			return {
+				id: PROVIDER_ID,
+				displayName: 'Copilot',
+				componentExtensionId: EXTENSION_ID,
+				installState: 'failed',
+				models: [],
+				capabilities: this.capabilities('incompatible'),
+			};
+		}
+	}
+
+	public async detectCapabilities(): Promise<SessionCapabilities> {
+		const probe = await this.runtime.ensureProbe();
+		return this.capabilities(probe.authenticated ? 'ready' : 'auth_required');
+	}
+
+	public async listModels(): Promise<ProviderModelOption[]> {
+		return this.toModelOptions((await this.runtime.ensureProbe()).models);
+	}
+
+	public async createSession(input: CreateSessionInput): Promise<AgentSessionRef> {
+		const probe = await this.ensureReady();
+		this.assertModel(probe.models, input.modelId, input.effort);
+		const requestedSessionId = randomUUID();
+		const sdkSession = await probe.client.createSession(this.sessionConfig(input, requestedSessionId));
+		const session: AgentSessionRef = {
+			provider: PROVIDER_ID,
+			sessionId: sdkSession.sessionId,
+			surface: 'copilot-sdk',
+			modelId: input.modelId,
+			effort: input.effort,
+			openUri: input.traceOpenUri || `vscode://${EXTENSION_ID}/session/open?v=1&executionId=${encodeURIComponent(input.executionId)}`,
+		};
+		const state: CopilotSessionState = {
+			executionId: input.executionId,
+			session,
+			sdkSession,
+			workingDirectory: input.workingDirectory,
+			mcpServer: input.mcpServer,
+			status: 'idle',
+			sequence: 0,
+			updatedAt: new Date().toISOString(),
+			unsubscribers: [],
+		};
+		this.sessions.set(session.sessionId, state);
+		this.bindEvents(state);
+		return session;
+	}
+
+	public async send(input: SendSessionInput): Promise<{ turnId?: string; submissionId: string }> {
+		const state = this.requireSession(input.session);
+		if (state.activeTurnId) {
+			throw this.withCode('CAPABILITY_UNAVAILABLE', 'Copilot already has an active turn; use append.');
+		}
+		return this.submit(state, input, 'enqueue');
+	}
+
+	public async append(input: AppendSessionInput): Promise<{ turnId?: string; submissionId: string }> {
+		const state = this.requireSession(input.session);
+		if (state.activeTurnId && input.expectedTurnId !== state.activeTurnId) {
+			throw this.withCode('STALE_TURN', 'The active Copilot turn changed before append.');
+		}
+		return this.submit(state, input, state.activeTurnId ? 'immediate' : 'enqueue');
+	}
+
+	public async query(input: QuerySessionInput): Promise<SessionSnapshot> {
+		let state = this.sessions.get(input.session.sessionId);
+		if (!state) {
+			if (!input.executionId || !input.workingDirectory || !input.mcpServer) {
+				throw this.withCode('NO_ACTIVE_SESSION', 'Copilot session recovery needs its workspace context.');
+			}
+			const probe = await this.ensureReady();
+			const sdkSession = await probe.client.resumeSession(input.session.sessionId, this.sessionConfig({
+				executionId: input.executionId,
+				workingDirectory: input.workingDirectory,
+				mcpServer: input.mcpServer,
+				modelId: input.session.modelId || '',
+				effort: input.session.effort,
+			}, input.session.sessionId));
+			state = {
+				executionId: input.executionId,
+				session: { ...input.session },
+				sdkSession,
+				workingDirectory: input.workingDirectory,
+				mcpServer: input.mcpServer,
+				status: 'idle',
+				sequence: 0,
+				updatedAt: new Date().toISOString(),
+				unsubscribers: [],
+			};
+			this.sessions.set(input.session.sessionId, state);
+			this.bindEvents(state);
+		}
+		return this.snapshot(state);
+	}
+
+	public async mutate(input: SessionMutationInput): Promise<SessionSnapshot> {
+		const state = this.requireSession(input.session);
+		if (input.operation !== 'setModel' || !input.value) {
+			throw this.withCode('CAPABILITY_UNAVAILABLE', `Copilot does not support ${input.operation}.`);
+		}
+		const models = (await this.ensureReady()).models;
+		this.assertModel(models, input.value, undefined);
+		await state.sdkSession.setModel(input.value);
+		state.session.modelId = input.value;
+		state.updatedAt = new Date().toISOString();
+		return this.snapshot(state);
+	}
+
+	public async interrupt(input: InterruptTurnInput): Promise<void> {
+		const state = this.requireSession(input.session);
+		if (!state.activeTurnId) {
+			throw this.withCode('NO_ACTIVE_TURN', 'Copilot has no active turn.');
+		}
+		if (input.expectedTurnId && input.expectedTurnId !== state.activeTurnId) {
+			throw this.withCode('STALE_TURN', 'The active Copilot turn changed before interrupt.');
+		}
+		await state.sdkSession.abort();
+		state.activeTurnId = undefined;
+		state.session.turnId = undefined;
+		this.updateState(state, 'interrupted');
+		this.emit(state, 'session.completed', { status: 'interrupted' });
+	}
+
+	public async open(_input: OpenSessionInput): Promise<void> {
+		return;
+	}
+
+	public async respondToInput(input: RespondToInputInput): Promise<void> {
+		const pending = this.pendingInputs.get(input.requestId);
+		// Copilot-P1-02：幂等返回——请求已被超时或 dispose 路径提前解决时，静默成功而非抛出
+		if (!pending || pending.sessionId !== input.session.sessionId) {
+			return;
+		}
+		clearTimeout(pending.timer);
+		this.pendingInputs.delete(input.requestId);
+		if (pending.kind === 'question') {
+			pending.resolve({ answer: input.decision === 'approve' ? input.value || '' : '', wasFreeform: true });
+		} else {
+			pending.resolve(input.decision === 'approve'
+				? { kind: 'approve-once', approvedInteractively: true }
+				: { kind: 'reject', feedback: 'Denied by the user.' });
+		}
+	}
+
+	public onDidEvent(listener: (event: AgentSessionEventPayload) => void): vscode.Disposable {
+		return this.eventEmitter.event(listener);
+	}
+
+	public dispose(): void {
+		for (const pending of this.pendingInputs.values()) {
+			clearTimeout(pending.timer);
+			pending.resolve(pending.kind === 'question'
+				? { answer: '', wasFreeform: true }
+				: { kind: 'reject', feedback: 'Provider disposed.' });
+		}
+		this.pendingInputs.clear();
+		for (const state of this.sessions.values()) {
+			for (const unsubscribe of state.unsubscribers) {
+				unsubscribe();
+			}
+			void state.sdkSession.disconnect().catch(() => undefined);
+		}
+		this.sessions.clear();
+		this.eventEmitter.dispose();
+	}
+
+	private async submit(
+		state: CopilotSessionState,
+		input: SendSessionInput,
+		mode: 'enqueue' | 'immediate'
+	): Promise<{ turnId?: string; submissionId: string }> {
+		const probe = await this.ensureReady();
+		this.assertModel(probe.models, input.modelId, input.effort);
+		if (state.session.modelId !== input.modelId || state.session.effort !== input.effort) {
+			await state.sdkSession.setModel(input.modelId, { reasoningEffort: input.effort as any });
+			state.session.modelId = input.modelId;
+			state.session.effort = input.effort;
+		}
+		const messageId = await state.sdkSession.send({ prompt: input.message, mode });
+		const submissionId = input.idempotencyKey || messageId || randomUUID();
+		state.activeTurnId = messageId || submissionId;
+		state.session.turnId = state.activeTurnId;
+		this.updateState(state, 'running');
+		return { submissionId, turnId: state.activeTurnId };
+	}
+
+	private sessionConfig(
+		input: Pick<CreateSessionInput, 'executionId' | 'workingDirectory' | 'mcpServer' | 'modelId' | 'effort'>,
+		sessionId: string
+	): SessionConfig {
+		return {
+			sessionId,
+			model: input.modelId,
+			reasoningEffort: input.effort as any,
+			workingDirectory: input.workingDirectory,
+			streaming: true,
+			systemMessage: {
+				mode: 'append',
+				content: [
+					INFINITE_MAP_CONTROL_INSTRUCTIONS,
+					'Provider trace context (protocolVersion 1):',
+					JSON.stringify({ executionId: input.executionId, provider: PROVIDER_ID, sessionId }),
+				].join('\n'),
+			},
+			mcpServers: {
+				infiniteMap: {
+					type: 'stdio',
+					command: input.mcpServer.command,
+					args: input.mcpServer.args,
+				},
+			},
+			onPermissionRequest: (request) => this.requestPermission(sessionId, request),
+			onUserInputRequest: (request) => this.requestQuestion(sessionId, request.question),
+		};
+	}
+
+	private bindEvents(state: CopilotSessionState): void {
+		state.unsubscribers.push(state.sdkSession.on((event: any) => {
+			switch (event.type) {
+				case 'assistant.message_delta':
+					this.emit(state, 'session.delta', { delta: event.data?.deltaContent || '' });
+					break;
+				case 'tool.execution_start':
+					this.emit(state, 'session.tool.started', event.data || {});
+					break;
+				case 'tool.execution_complete':
+					this.emit(state, 'session.tool.completed', event.data || {});
+					break;
+				case 'session.idle':
+					state.activeTurnId = undefined;
+					state.session.turnId = undefined;
+					this.updateState(state, 'idle');
+					this.emit(state, 'session.completed', { status: 'idle' });
+					break;
+				case 'session.error':
+					state.activeTurnId = undefined;
+					state.session.turnId = undefined;
+					this.updateState(state, 'failed', { error: event.data?.message || 'Copilot session failed.' });
+					this.emit(state, 'session.completed', { status: 'failed' });
+					break;
+				default:
+					break;
+			}
+		}));
+	}
+
+	private requestPermission(sessionId: string, request: PermissionRequest): Promise<any> {
+		const state = this.sessions.get(sessionId);
+		const requestId = randomUUID();
+		// Copilot-P1-02：先注册 pending input，再 emit 事件——防止同步事件处理器在
+		// pendingInputs 尚未写入时就调用 respondToInput() 造成找不到记录的竞争条件
+		const promise = this.createPendingInput(sessionId, requestId, 'approval');
+		if (state) {
+			this.emit(state, 'session.input.required', {
+				kind: 'approval',
+				requestId,
+				title: `Copilot permission · ${request.kind}`,
+				params: request,
+			});
+		}
+		return promise;
+	}
+
+	private requestQuestion(sessionId: string, question: string): Promise<any> {
+		const state = this.sessions.get(sessionId);
+		const requestId = randomUUID();
+		// Copilot-P1-02：先注册 pending input，再 emit 事件（同 requestPermission）
+		const promise = this.createPendingInput(sessionId, requestId, 'question');
+		if (state) {
+			this.emit(state, 'session.input.required', {
+				kind: 'question',
+				requestId,
+				title: question,
+			});
+		}
+		return promise;
+	}
+
+	private createPendingInput(
+		sessionId: string,
+		requestId: string,
+		kind: 'approval' | 'question'
+	): Promise<any> {
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => {
+				this.pendingInputs.delete(requestId);
+				resolve(kind === 'question'
+					? { answer: '', wasFreeform: true }
+					: { kind: 'user-not-available' });
+			}, 300_000);
+			this.pendingInputs.set(requestId, { sessionId, kind, resolve, timer });
+		});
+	}
+
+	private async ensureReady(): Promise<CopilotRuntimeProbe> {
+		const probe = await this.runtime.ensureProbe();
+		if (!probe.authenticated) {
+			throw this.withCode('AUTH_REQUIRED', 'Copilot authentication is required.');
+		}
+		return probe;
+	}
+
+	private toModelOptions(models: ModelInfo[]): ProviderModelOption[] {
+		return models
+			.filter((model) => model.policy?.state !== 'disabled')
+			.map((model) => ({
+				id: model.id,
+				label: model.name || model.id,
+				effortOptions: (model.supportedReasoningEfforts || []).map((effort) => ({
+					id: effort,
+					label: effort,
+				})),
+				defaultEffort: model.defaultReasoningEffort,
+			}));
+	}
+
+	private assertModel(models: ModelInfo[], modelId: string, effort?: string): void {
+		const model = models.find((candidate) => candidate.id === modelId);
+		if (!model) {
+			throw this.withCode('MODEL_UNAVAILABLE', `Selected Copilot model is unavailable: ${modelId}`);
+		}
+		if (effort && !(model.supportedReasoningEfforts || []).includes(effort as any)) {
+			throw this.withCode('EFFORT_UNAVAILABLE', `Selected Copilot effort is unavailable: ${effort}`);
+		}
+	}
+
+	private capabilities(availability: SessionCapabilities['availability']): SessionCapabilities {
+		return {
+			availability,
+			lifecycle: {
+				create: 'native',
+				resume: 'native',
+				list: 'native',
+				read: 'native',
+				interrupt: 'native',
+			},
+			inputMode: 'immediate-steer',
+			mutations: {
+				rename: 'unsupported',
+				setModel: 'native',
+				archive: 'unsupported',
+			},
+			canStream: true,
+			kmTaskExecution: true,
+			receiptMode: 'schema-tool',
+			openTargets: ['infinite-map'],
+			sessionOwnership: 'provider',
+		};
+	}
+
+	private requireSession(session: AgentSessionRef): CopilotSessionState {
+		const state = this.sessions.get(session.sessionId);
+		if (!state) {
+			throw this.withCode('NO_ACTIVE_SESSION', `Copilot session is not loaded: ${session.sessionId}`);
+		}
+		return state;
+	}
+
+	private snapshot(state: CopilotSessionState): SessionSnapshot {
+		return {
+			executionId: state.executionId,
+			status: state.status,
+			session: { ...state.session },
+			sequence: state.sequence,
+			updatedAt: state.updatedAt,
+			activeTurnId: state.activeTurnId,
+			effectiveConfig: {
+				modelId: state.session.modelId,
+				effort: state.session.effort,
+			},
+		};
+	}
+
+	private updateState(
+		state: CopilotSessionState,
+		status: SessionSnapshot['status'],
+		extra: Record<string, unknown> = {}
+	): void {
+		state.status = status;
+		state.updatedAt = new Date().toISOString();
+		this.emit(state, 'session.state.changed', {
+			status,
+			activeTurnId: state.activeTurnId,
+			session: state.session,
+			...extra,
+		});
+	}
+
+	private emit(
+		state: CopilotSessionState,
+		type: AgentSessionEventPayload['type'],
+		payload: unknown
+	): void {
+		state.sequence += 1;
+		this.eventEmitter.fire({
+			executionId: state.executionId,
+			sequence: state.sequence,
+			type,
+			payload,
+		});
+	}
+
+	private withCode(code: string, message: string): Error {
+		const error = new Error(message) as Error & { code?: string };
+		error.code = code;
+		return error;
+	}
+}

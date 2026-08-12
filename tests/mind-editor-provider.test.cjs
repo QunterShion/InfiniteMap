@@ -147,7 +147,12 @@ Module._load = function patchedLoad(request, parent, isMain) {
 };
 require('ts-node/register/transpile-only');
 const { MindEditorProvider } = require('../src/mindEditor.ts');
+const { KmMcpClient } = require('../src/mcpClient/kmMcpClient.ts');
 Module._load = originalLoad;
+
+test.after(async () => {
+  await KmMcpClient.disposeAll();
+});
 
 function cancellationToken() {
   return {
@@ -163,6 +168,15 @@ async function waitForSentMessage(panel, predicate) {
     await new Promise((resolve) => setImmediate(resolve));
   }
   throw new Error('Timed out waiting for a Webview message.');
+}
+
+async function waitForSentMessageAfter(panel, startIndex, predicate) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const message = panel.sent.slice(startIndex).find(predicate);
+    if (message) return message;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error('Timed out waiting for a new Webview message.');
 }
 
 function createPanel({ initialHtml = '', visible = true } = {}) {
@@ -220,7 +234,10 @@ function createPanel({ initialHtml = '', visible = true } = {}) {
     panel,
     sent,
     htmlAssignments,
-    dispatch: async (message) => Promise.all(Array.from(messageHandlers, (handler) => handler(message))),
+    dispatch: async (message) => Promise.all(Array.from(
+		messageHandlers,
+		(handler) => handler({ protocolVersion: 1, ...message })
+	)),
     getMessageHandlerCount: () => messageHandlers.size,
     getDisposeCount: () => disposeCount,
     setMessageDelivery: (command, value) => {
@@ -299,13 +316,25 @@ test('custom document keeps drafts in memory and completes the save contract', a
   await panel.dispatch({ command: 'draft', exportData: firstDraft });
   assert.equal(fs.readFileSync(sourcePath, 'utf8'), original);
   assert.equal(changeCount, 1);
+  const dirtySnapshot = await waitForSentMessage(
+    panel,
+    (message) => message.command === 'agentSessionSnapshot' && message.document?.dirty === true
+  );
+  assert.equal(dirtySnapshot.document.conflict, false);
 
+  const cleanSnapshotStart = panel.sent.length;
   const save = provider.saveCustomDocument(document, cancellationToken());
   const firstSaveRequest = panel.sent.at(-1);
   assert.equal(firstSaveRequest.command, 'requestSave');
   await panel.dispatch({ command: 'save', requestId: firstSaveRequest.requestId, exportData: firstDraft });
   await save;
   assert.equal(fs.readFileSync(sourcePath, 'utf8'), firstDraft);
+  const cleanSnapshot = await waitForSentMessageAfter(
+    panel,
+    cleanSnapshotStart,
+    (message) => message.command === 'agentSessionSnapshot' && message.document?.dirty === false
+  );
+  assert.equal(cleanSnapshot.document.conflict, false);
   assert.equal(fs.existsSync(sourcePath), true, 'editing the root must keep the current KM filename');
   assert.equal(fs.existsSync(path.join(tempDir, 'draft.km')), false, 'saving a root edit must not rename the KM file');
 
@@ -366,8 +395,8 @@ test('reloads clean documents after external edits and blocks conflicting saves'
   fs.writeFileSync(sourcePath, externalClean);
   await watcher.fireChange(MockUri.file(sourcePath));
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(panel.sent.at(-1).command, 'import');
-  assert.equal(panel.sent.at(-1).importData, externalClean);
+  const externalImport = panel.sent.filter((message) => message.command === 'import').at(-1);
+  assert.equal(externalImport.importData, externalClean);
 
   await panel.dispatch({ command: 'draft', exportData: localDraft });
   fs.writeFileSync(sourcePath, externalConflict);
@@ -929,7 +958,12 @@ test('creates a split file before acknowledging removal and never overwrites the
   });
   assert.deepEqual(JSON.parse(fs.readFileSync(destinationPath, 'utf8')), JSON.parse(split));
   assert.equal(fs.readFileSync(sourcePath, 'utf8'), original);
-  assert.deepEqual(panel.sent.at(-1), { command: 'splitNodeResult', requestId: 'split-1', ok: true });
+  assert.deepEqual(panel.sent.at(-1), {
+	command: 'splitNodeResult',
+	protocolVersion: 1,
+	requestId: 'split-1',
+	ok: true,
+  });
   assert.equal(saveDialogOptions.at(-1).defaultUri.fsPath, destinationPath);
 
   await panel.dispatch({
@@ -941,6 +975,7 @@ test('creates a split file before acknowledging removal and never overwrites the
   });
   assert.deepEqual(panel.sent.at(-1), {
     command: 'splitNodeResult',
+	protocolVersion: 1,
     requestId: 'split-cancelled',
     ok: false,
     cancelled: true,

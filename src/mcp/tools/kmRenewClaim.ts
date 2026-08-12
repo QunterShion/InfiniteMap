@@ -32,13 +32,13 @@ export const kmRenewClaimTool = {
   },
 };
 
-export function handleKmRenewClaim(args: {
+export async function handleKmRenewClaim(args: {
   filePath: string;
   claimId: string;
   workerId: string;
   leaseSeconds?: number;
 }) {
-  const result = renewClaim(
+  const result = await renewClaim(
     args.filePath,
     args.claimId,
     args.workerId,

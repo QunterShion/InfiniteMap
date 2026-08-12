@@ -42,7 +42,7 @@ export const kmClaimTodosTool = {
   },
 };
 
-export function handleKmClaimTodos(args: {
+export async function handleKmClaimTodos(args: {
   filePath: string;
   workerId: string;
   limit?: number;
@@ -50,7 +50,7 @@ export function handleKmClaimTodos(args: {
   leaseSeconds?: number;
   expectedKmRevision?: string;
 }) {
-  const result = claimTodos(args.filePath, args.workerId, {
+  const result = await claimTodos(args.filePath, args.workerId, {
     limit: args.limit,
     nodeIds: args.nodeIds,
     leaseSeconds: args.leaseSeconds,

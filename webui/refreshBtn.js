@@ -108,7 +108,11 @@
         try {
             // acquireVsCodeApi().postMessage() returns void. Completion arrives
             // through an explicit refreshResult message from the provider.
-            window.vscode.postMessage({ command: 'refresh', requestId: requestId });
+            window.vscode.postMessage({
+				command: 'refresh',
+				protocolVersion: window.infiniteMapProtocolVersion,
+				requestId: requestId
+			});
         } catch (error) {
             finishRefresh(requestId);
         }
@@ -150,7 +154,7 @@
 
     window.addEventListener('message', function(event) {
         var message = event.data;
-        if (message && message.command === 'refreshResult') {
+        if (message && message.protocolVersion === window.infiniteMapProtocolVersion && message.command === 'refreshResult') {
             finishRefresh(message.requestId);
         }
     });

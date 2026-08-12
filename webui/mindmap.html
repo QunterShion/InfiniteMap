@@ -26,6 +26,8 @@
 
     <script>
         window.vscode = acquireVsCodeApi();
+		window.infiniteMapProtocolVersion = 1;
+		window.infiniteMapDocumentUri = decodeURIComponent("${vscode_document_uri}");
         var lang = "${vscode_lang}";
         var upload_url = "${vscode_upload_url}";
         var obj = {

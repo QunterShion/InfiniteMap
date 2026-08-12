@@ -95,6 +95,7 @@ function createHarness() {
 
   const window = {
     infiniteMapWebviewSessionId: 'webview-session',
+	infiniteMapProtocolVersion: 1,
     addEventListener(name, handler) {
       if (name === 'message') state.messageListeners.push(handler);
     },
@@ -166,6 +167,7 @@ test('refresh control matches Mind Map and waits for an explicit result', () => 
 
   assert.equal(harness.state.messages.length, 1);
   assert.equal(harness.state.messages[0].command, 'refresh');
+	assert.equal(harness.state.messages[0].protocolVersion, 1);
   assert.equal(harness.state.messages[0].requestId, 'webview-session:refresh:1');
   assert.equal(button.attrs['aria-disabled'], 'true');
   assert.equal(button.attrs['aria-busy'], 'true');
@@ -173,6 +175,7 @@ test('refresh control matches Mind Map and waits for an explicit result', () => 
 
   harness.dispatchMessage({
     command: 'refreshResult',
+	protocolVersion: 1,
     requestId: harness.state.messages[0].requestId,
     ok: true,
   });

@@ -77,12 +77,14 @@ angular
 					window.minder.exportData("svg").then((data) => {
 						window.vscode.postMessage({
 							command: "draft",
+							protocolVersion: window.infiniteMapProtocolVersion,
 							exportData: data,
 						});
 					});
 				} else {
 					window.vscode.postMessage({
 						command: "draft",
+						protocolVersion: window.infiniteMapProtocolVersion,
 						exportData: JSON.stringify(window.minder.exportJson(), null, 4),
 					});
 				}
@@ -99,6 +101,7 @@ angular
 			 */
 			window.addEventListener("message", function (event) {
 				const message = event.data;
+				if (!message || message.protocolVersion !== window.infiniteMapProtocolVersion) return;
 				window.message = message;
 				const { command, extName } = message;
 				if (extName) {
@@ -107,6 +110,7 @@ angular
 
 				switch (command) {
 					case "import": {
+						window.infiniteMapDocumentUri = message.documentUri || window.infiniteMapDocumentUri;
 						const suppressionToken = message.importRequestId || `import-${++importSequence}`;
 						suppressDraft(suppressionToken);
 						const importTask = Promise.resolve().then(() => {
@@ -125,6 +129,7 @@ angular
 							if (message.importRequestId) {
 								window.vscode.postMessage({
 									command: "importResult",
+									protocolVersion: window.infiniteMapProtocolVersion,
 									importRequestId: message.importRequestId,
 									ok,
 									error: error ? String(error.message || error) : undefined,
@@ -144,21 +149,50 @@ angular
 						// VS Code native save channel: echo the request ID to reject stale responses.
 						window.vscode.postMessage({
 							command: "save",
+							protocolVersion: window.infiniteMapProtocolVersion,
 							requestId: message.requestId,
 							exportData: JSON.stringify(window.minder.exportJson(), null, 4),
 						});
 						break;
 					case "ping":
-						window.vscode.postMessage({ command: "pong", pingId: message.pingId });
+						window.vscode.postMessage({ command: "pong", protocolVersion: window.infiniteMapProtocolVersion, pingId: message.pingId });
 						break;
 					case "execState":
 						// 并行执行旁车状态：供右下角节点卡片展示认领/租约信息
 						window.kmExecState = message.tasks || {};
 						document.dispatchEvent(new CustomEvent("km-exec-state"));
 						break;
+					case "kmExecutionAvailability":
+						window.kmExecutionAvailability = {
+							available: message.available === true,
+							reason: message.reason || null,
+							state: message.state || null,
+						};
+						document.dispatchEvent(new CustomEvent("km-execution-availability"));
+						break;
+					case "mcpConnectionState":
+						window.kmMcpConnection = {
+							state: message.state || "unavailable",
+							attempt: message.attempt || 0,
+							nextRetryMs: message.nextRetryMs,
+							retryable: message.retryable !== false,
+						};
+						document.dispatchEvent(new CustomEvent("mcp-connection-state", {
+							detail: window.kmMcpConnection,
+						}));
+						break;
+					case "agentSessionHistoryOpen":
+						document.dispatchEvent(new CustomEvent("agent-session-history-open", {
+							detail: {
+								nodeId: message.nodeId,
+								executionId: message.executionId,
+							},
+						}));
+						break;
 					case "reconnect":
 						window.vscode.postMessage({
 							command: "reconnected",
+							protocolVersion: window.infiniteMapProtocolVersion,
 							reconnectId: message.reconnectId,
 							exportData: JSON.stringify(window.minder.exportJson(), null, 4),
 							webviewSessionId: window.infiniteMapWebviewSessionId,
@@ -178,6 +212,7 @@ angular
 					) {
 						window.vscode.postMessage({
 							command: "clicklink",
+							protocolVersion: window.infiniteMapProtocolVersion,
 							link: link.url,
 						});
 					}
@@ -189,6 +224,7 @@ angular
 				// hosts can remain alive when a same-version VSIX is overwritten.
 				window.vscode.postMessage({
 					command: "loaded",
+					protocolVersion: window.infiniteMapProtocolVersion,
 					webviewSessionId: window.infiniteMapWebviewSessionId,
 					timestamp: new Date().toISOString(),
 				});
@@ -232,6 +268,7 @@ angular
 		editor.minder.exportData(exportType).then(function (content) {
 			window.vscode.postMessage({
 				command: "export",
+				protocolVersion: window.infiniteMapProtocolVersion,
 				filename: $("#node_text1").text(),
 				type: type,
 				content,
@@ -243,10 +280,12 @@ angular
 	$(document).on("click", ".import", function (event) {
 		window.vscode.postMessage({
 			command: "importFile",
+			protocolVersion: window.infiniteMapProtocolVersion,
 		});
 	});
 
 	window.addEventListener("message", function (event) {
+		if (!event.data || event.data.protocolVersion !== window.infiniteMapProtocolVersion) return;
 		let command = event.data.command;
 		let content = event.data.content;
 		let basename = event.data.basename;

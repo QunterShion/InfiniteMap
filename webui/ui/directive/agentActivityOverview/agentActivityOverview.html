@@ -1,0 +1,33 @@
+<aside data-component="agent-activity-overview" ng-if="activity.visible"
+	aria-label="{{ 'activityOverview' | agentSessionText }}">
+	<header data-slot="activity-header">
+		<div>
+			<div data-slot="activity-title">{{ 'activityOverview' | agentSessionText }}</div>
+			<div data-slot="activity-meta">{{ activity.total }} {{ 'activeTasks' | agentSessionText }}</div>
+		</div>
+		<button data-slot="button close-button" type="button" ng-click="closeAgentActivity()"
+			aria-label="{{ 'close' | agentSessionText }}">{{ 'close' | agentSessionText }}</button>
+	</header>
+	<div data-slot="notice" ng-if="activity.loading">{{ 'loading' | agentSessionText }}</div>
+	<div data-slot="error" ng-if="activity.error">{{ activity.error }}</div>
+	<div data-slot="empty" ng-if="!activity.loading && !activity.error && !activity.items.length">
+		{{ 'noActiveTasks' | agentSessionText }}
+	</div>
+	<ol data-slot="activity-list" ng-if="activity.items.length">
+		<li data-slot="activity-item" ng-repeat="item in activity.items track by (item.executionId || item.nodeId + ':lease')">
+			<button data-slot="activity-link" type="button" ng-click="openActivityHistory(item)">
+				<span data-slot="activity-node">{{ item.nodeTitle }}</span>
+				<span data-slot="activity-state">{{ item.status }}</span>
+			</button>
+			<div data-slot="activity-detail" ng-if="item.provider">
+				{{ item.provider }}<span ng-if="item.modelId"> · {{ item.modelId }}</span>
+			</div>
+			<div data-slot="activity-detail" ng-if="item.workerId">
+				{{ 'worker' | agentSessionText }} · {{ item.workerId }}
+			</div>
+			<div data-slot="activity-detail" ng-if="item.leaseUntil">
+				{{ 'leaseUntil' | agentSessionText }} · {{ item.leaseUntil | date:'yyyy-MM-dd HH:mm:ss' }}
+			</div>
+		</li>
+	</ol>
+</aside>

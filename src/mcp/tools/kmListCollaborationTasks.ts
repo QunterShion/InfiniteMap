@@ -4,9 +4,9 @@
 import { listCollaborationTasks } from '../services/kmFileReader';
 import { isLeaseActive, readExecState } from '../services/kmExecState';
 
-export function handleKmListCollaborationTasks(args: { filePath: string }) {
-  const result = listCollaborationTasks(args.filePath);
-  const execState = readExecState(result.filePath);
+export async function handleKmListCollaborationTasks(args: { filePath: string }) {
+  const result = await listCollaborationTasks(args.filePath);
+  const execState = await readExecState(result.filePath);
   const tasks = result.tasks.map((task) => {
     const entry = execState.tasks[task.nodeId];
     const claimed = isLeaseActive(entry);

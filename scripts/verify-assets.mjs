@@ -58,7 +58,9 @@ const refreshScript = readFileSync(join(root, 'webui/refreshBtn.js'), 'utf8');
 for (const refreshContractToken of [
   'refresh-from-disk-btn',
   'aria-label=',
-  "command: 'refresh', requestId",
+  "command: 'refresh'",
+  'protocolVersion: window.infiniteMapProtocolVersion',
+	'requestId: requestId',
   'refreshResult',
   'mindmap-refresh-icon',
   'MutationObserver',
@@ -69,6 +71,8 @@ for (const refreshContractToken of [
 }
 
 const editorSource = readFileSync(join(root, 'src/mindEditor.ts'), 'utf8');
+const documentSource = readFileSync(join(root, 'src/editor/MindEditorDocument.ts'), 'utf8');
+const customDocumentSource = `${editorSource}\n${documentSource}`;
 for (const handshake of ["case 'loaded':", "case 'ready':", "case 'importResult':", "case 'refresh':"]) {
   if (!editorSource.includes(handshake)) {
     errors.push(`src/mindEditor.ts is missing the ${handshake} compatibility branch`);
@@ -89,8 +93,8 @@ for (const saveContractToken of [
   'SAVE_TIMEOUT_MS',
   'CustomDocumentContentChangeEvent',
 ]) {
-  if (!editorSource.includes(saveContractToken)) {
-    errors.push(`src/mindEditor.ts is missing ${saveContractToken}`);
+  if (!customDocumentSource.includes(saveContractToken)) {
+		errors.push(`custom editor sources are missing ${saveContractToken}`);
   }
 }
 for (const refreshContractToken of [
@@ -99,12 +103,12 @@ for (const refreshContractToken of [
   'reloadInvocationCounts',
   'Save cancelled because the document is being reloaded from disk',
 ]) {
-  if (!editorSource.includes(refreshContractToken)) {
-    errors.push(`src/mindEditor.ts is missing ${refreshContractToken}`);
+  if (!customDocumentSource.includes(refreshContractToken)) {
+		errors.push(`custom editor sources are missing ${refreshContractToken}`);
   }
 }
-if (editorSource.includes("throw new Error('Method not implemented.')")) {
-  errors.push('src/mindEditor.ts still contains an unimplemented custom-document operation');
+if (customDocumentSource.includes("throw new Error('Method not implemented.')")) {
+  errors.push('custom editor sources still contain an unimplemented custom-document operation');
 }
 
 const html = readFileSync(join(root, 'webui/mindmap.html'), 'utf8');

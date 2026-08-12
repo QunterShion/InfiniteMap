@@ -23,6 +23,7 @@ test('webview startup and refresh imports expose explicit protocol acknowledgeme
   };
 
   const window = {
+	infiniteMapProtocolVersion: 1,
     crypto: { randomUUID: () => 'webview-session' },
     vscode: {
       getState: () => ({}),
@@ -67,6 +68,7 @@ test('webview startup and refresh imports expose explicit protocol acknowledgeme
     JSON.parse(JSON.stringify(postedMessages[0])),
     {
       command: 'loaded',
+	  protocolVersion: 1,
       webviewSessionId: 'webview-session',
       timestamp: postedMessages[0].timestamp,
     }
@@ -78,6 +80,7 @@ test('webview startup and refresh imports expose explicit protocol acknowledgeme
   messageHandler({
     data: {
       command: 'import',
+	  protocolVersion: 1,
       extName: '.km',
       importData: '{"root":{"data":{"text":"refreshed"}}}',
       importRequestId: 'refresh-1',
@@ -90,12 +93,13 @@ test('webview startup and refresh imports expose explicit protocol acknowledgeme
   }]);
   assert.deepEqual(
     JSON.parse(JSON.stringify(postedMessages.at(-1))),
-    { command: 'importResult', importRequestId: 'refresh-1', ok: true }
+    { command: 'importResult', protocolVersion: 1, importRequestId: 'refresh-1', ok: true }
   );
 
   messageHandler({
     data: {
       command: 'import',
+	  protocolVersion: 1,
       extName: '.km',
       importData: '{"root":{"data":{"text":"classic"}},"template":"default"}',
       importRequestId: 'refresh-explicit-template',
@@ -107,6 +111,7 @@ test('webview startup and refresh imports expose explicit protocol acknowledgeme
   messageHandler({
     data: {
       command: 'import',
+	  protocolVersion: 1,
       extName: '.km',
       importData: '{}',
       fileStem: 'New map',
@@ -122,6 +127,7 @@ test('webview startup and refresh imports expose explicit protocol acknowledgeme
   messageHandler({
     data: {
       command: 'import',
+	  protocolVersion: 1,
       extName: '.km',
       importData: '{"fail":true}',
       importRequestId: 'refresh-2',

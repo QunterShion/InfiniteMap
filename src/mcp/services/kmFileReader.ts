@@ -5,11 +5,39 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as crypto from 'crypto';
+import { getCachedKmFileRevision } from './kmRevisionCache';
 
 export const KM_TODO_LABEL = '待拆解';
 export const KM_COLLABORATION_LABEL = '待协同';
 export const KM_DONE_LABEL = '已完成';
+
+export type KmTaskKind = 'breakdown' | 'collaboration';
+export type NodeExecutionStatus =
+  | 'allocated'
+  | 'starting'
+  | 'running'
+  | 'idle'
+  | 'interrupting'
+  | 'interrupted'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'conflict'
+  | 'disconnected';
+
+export interface KmLatestSession {
+  executionId: string;
+  taskKind: KmTaskKind;
+  provider: string;
+  sessionId: string;
+  surface: string;
+  modelId?: string;
+  effort?: string;
+  openUri: string;
+  status: NodeExecutionStatus;
+  startedAt: string;
+  updatedAt: string;
+}
 
 /** KM 节点结构 */
 export interface KmNode {
@@ -19,6 +47,14 @@ export interface KmNode {
     text: string;
     resource?: string[];
     expandState?: string;
+    hyperlink?: string;
+    note?: string;
+    infiniteMap?: {
+      schemaVersion: 1;
+      latestSession?: KmLatestSession;
+      sessionHistoryCount?: number;
+      originExecutionId?: string;
+    };
   };
   children: KmNode[];
 }
@@ -106,13 +142,17 @@ export interface ReadResult {
 /**
  * 读取并解析 KM 文件
  */
-export function readKmFile(filePath: string): KmDocument {
+export async function readKmFile(filePath: string): Promise<KmDocument> {
   const resolved = path.resolve(filePath);
-  if (!fs.existsSync(resolved)) {
-    throw new Error(`文件不存在: ${resolved}`);
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(resolved, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`文件不存在: ${resolved}`);
+    }
+    throw err;
   }
-
-  const raw = fs.readFileSync(resolved, 'utf-8');
   try {
     const doc = JSON.parse(raw) as KmDocument;
     if (!doc.root || !doc.root.data) {
@@ -130,31 +170,29 @@ export function readKmFile(filePath: string): KmDocument {
 /**
  * 计算 KM 文件内容版本，用于协同写回时检测过期上下文
  */
-export function getKmFileRevision(filePath: string): string {
-  const resolved = path.resolve(filePath);
-  if (!fs.existsSync(resolved)) {
-    throw new Error(`文件不存在: ${resolved}`);
-  }
-
-  return crypto
-    .createHash('sha256')
-    .update(fs.readFileSync(resolved))
-    .digest('hex');
+export async function getKmFileRevision(filePath: string): Promise<string> {
+	const resolved = path.resolve(filePath);
+	return getCachedKmFileRevision(resolved);
 }
 
 /**
  * 获取 KM 文件摘要信息
  */
-export function getKmSummary(filePath: string): ReadResult {
+export async function getKmSummary(filePath: string): Promise<ReadResult> {
   const resolved = path.resolve(filePath);
-  const doc = readKmFile(resolved);
+  const doc = await readKmFile(resolved);
 
   let nodeCount = 0;
   let maxDepth = 0;
+  let todoCount = 0;
 
   function traverse(node: KmNode, depth: number): void {
     nodeCount++;
     if (depth > maxDepth) maxDepth = depth;
+    const resources = node.data.resource || [];
+    if (resources.includes(KM_TODO_LABEL) && !resources.includes(KM_DONE_LABEL)) {
+      todoCount++;
+    }
     if (node.children) {
       for (const child of node.children) {
         traverse(child, depth + 1);
@@ -163,14 +201,12 @@ export function getKmSummary(filePath: string): ReadResult {
   }
   traverse(doc.root, 0);
 
-  const todos = listTodos(filePath);
-
   return {
     filePath: resolved,
     fileName: path.basename(resolved),
     nodeCount,
     treeDepth: maxDepth,
-    todoCount: todos.length,
+    todoCount,
     rootText: doc.root.data.text,
   };
 }
@@ -178,8 +214,8 @@ export function getKmSummary(filePath: string): ReadResult {
 /**
  * 列出所有待拆解节点
  */
-export function listTodos(filePath: string): TodoNode[] {
-  const doc = readKmFile(filePath);
+export async function listTodos(filePath: string): Promise<TodoNode[]> {
+  const doc = await readKmFile(filePath);
   const todos: TodoNode[] = [];
 
   function traverse(
@@ -222,24 +258,77 @@ export function listTodos(filePath: string): TodoNode[] {
 /**
  * 列出所有待拆解节点，并返回文件内容版本供回写时乐观校验
  */
-export function listTodosWithRevision(filePath: string): TodoList {
+export async function listTodosWithRevision(filePath: string): Promise<TodoList> {
   const resolved = path.resolve(filePath);
-  const todos = listTodos(resolved);
+  const todos = await listTodos(resolved);
 
   return {
     filePath: resolved,
-    kmRevision: getKmFileRevision(resolved),
+    kmRevision: await getKmFileRevision(resolved),
     todoCount: todos.length,
     todos,
   };
 }
 
 /**
+ * 单次读文件，同时返回 todos、kmRevision 和已解析的文档对象，
+ * 供调用方（如 km_list_todos）复用 doc 传入 collectLeafTodos，避免双重读盘（MCP-P1-02）
+ */
+export async function listTodosWithRevisionAndDoc(filePath: string): Promise<TodoList & { doc: KmDocument }> {
+  const resolved = path.resolve(filePath);
+  const doc = await readKmFile(resolved);
+  const todos: TodoNode[] = [];
+
+  function traverse(
+    node: KmNode,
+    depth: number,
+    pathSegments: string[],
+    parentText?: string,
+    grandParentText?: string
+  ): void {
+    const resources = node.data.resource || [];
+    const hasTodo = resources.includes(KM_TODO_LABEL);
+    const hasDone = resources.includes(KM_DONE_LABEL);
+
+    if (hasTodo && !hasDone) {
+      todos.push({
+        nodeId: node.data.id,
+        text: node.data.text,
+        path: [...pathSegments, node.data.text].join(' > '),
+        depth,
+        parentText,
+        grandParentText,
+      });
+    }
+
+    const newSegments = [...pathSegments, node.data.text];
+    const currentText = node.data.text;
+    const currentParent = depth === 0 ? undefined : pathSegments[pathSegments.length - 1];
+
+    if (node.children) {
+      for (const child of node.children) {
+        traverse(child, depth + 1, newSegments, currentText, currentParent || parentText);
+      }
+    }
+  }
+
+  traverse(doc.root, 0, [], undefined, undefined);
+
+  return {
+    filePath: resolved,
+    kmRevision: await getKmFileRevision(resolved),
+    todoCount: todos.length,
+    todos,
+    doc,
+  };
+}
+
+/**
  * 列出所有待协同节点
  */
-export function listCollaborationTasks(filePath: string): CollaborationTaskList {
+export async function listCollaborationTasks(filePath: string): Promise<CollaborationTaskList> {
   const resolved = path.resolve(filePath);
-  const doc = readKmFile(resolved);
+  const doc = await readKmFile(resolved);
   const tasks: CollaborationTaskNode[] = [];
 
   function traverse(
@@ -280,7 +369,7 @@ export function listCollaborationTasks(filePath: string): CollaborationTaskList 
 
   return {
     filePath: resolved,
-    fileRevision: getKmFileRevision(resolved),
+    fileRevision: await getKmFileRevision(resolved),
     taskCount: tasks.length,
     tasks,
   };
@@ -289,14 +378,14 @@ export function listCollaborationTasks(filePath: string): CollaborationTaskList 
 /**
  * 获取待协同节点的根到目标链路、完整子树和必要同级上下文
  */
-export function getCollaborationContext(
+export async function getCollaborationContext(
   filePath: string,
   nodeId: string,
   siblingLimit: number = 8
-): CollaborationContext {
+): Promise<CollaborationContext> {
   const resolved = path.resolve(filePath);
-  const doc = readKmFile(resolved);
-  const fileRevision = getKmFileRevision(resolved);
+  const doc = await readKmFile(resolved);
+  const fileRevision = await getKmFileRevision(resolved);
   let targetNode: KmNode | null = null;
   let parentNode: KmNode | null = null;
   let targetDepth = 0;
@@ -392,10 +481,56 @@ export function getCollaborationContext(
 }
 
 /**
+ * 从已解析的文档构建 nodeId → KmNode 索引，避免每次查找都做 DFS O(n)
+ */
+export function buildNodeIndex(doc: KmDocument): Map<string, KmNode> {
+  const index = new Map<string, KmNode>();
+  function traverse(node: KmNode): void {
+    index.set(node.data.id, node);
+    if (node.children) {
+      for (const child of node.children) {
+        traverse(child);
+      }
+    }
+  }
+  traverse(doc.root);
+  return index;
+}
+
+/**
+ * 按节点 ID 获取节点详情（含完整子树）和路径，单次读文件
+ */
+export async function getNodeWithPath(
+  filePath: string,
+  nodeId: string
+): Promise<{ node: KmNode; nodePath: string } | null> {
+  const doc = await readKmFile(filePath);
+  const index = buildNodeIndex(doc);
+  const node = index.get(nodeId);
+  if (!node) return null;
+
+  function findPath(current: KmNode, segments: string[]): string | null {
+    if (current.data.id === nodeId) {
+      return [...segments, current.data.text].join(' > ');
+    }
+    if (current.children) {
+      for (const child of current.children) {
+        const found = findPath(child, [...segments, current.data.text]);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  const nodePath = findPath(doc.root, []) ?? nodeId;
+  return { node, nodePath };
+}
+
+/**
  * 按节点 ID 获取节点详情（含完整子树）
  */
-export function getNodeById(filePath: string, nodeId: string): KmNode | null {
-  const doc = readKmFile(filePath);
+export async function getNodeById(filePath: string, nodeId: string): Promise<KmNode | null> {
+  const doc = await readKmFile(filePath);
 
   function find(node: KmNode): KmNode | null {
     if (node.data.id === nodeId) return node;
@@ -414,8 +549,8 @@ export function getNodeById(filePath: string, nodeId: string): KmNode | null {
 /**
  * 获取节点的路径（从根开始的文本路径）
  */
-export function getNodePath(filePath: string, nodeId: string): string | null {
-  const doc = readKmFile(filePath);
+export async function getNodePath(filePath: string, nodeId: string): Promise<string | null> {
+  const doc = await readKmFile(filePath);
 
   function findPath(node: KmNode, segments: string[]): string | null {
     if (node.data.id === nodeId) {

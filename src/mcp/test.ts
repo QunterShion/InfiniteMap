@@ -80,8 +80,9 @@ try {
   const todos = listTodos(testFile);
   if (todos.length > 0) {
     const nodeIds = todos.map((t) => t.nodeId);
-    const result = markNodesDone(testFile, nodeIds, true);
-    console.log(`DRY RUN: 将修改 ${result.modified} 个节点`);
+    void markNodesDone(testFile, nodeIds, true).then((result) => {
+      console.log(`DRY RUN: 将修改 ${result.modified} 个节点`);
+    });
   } else {
     console.log('没有待拆解节点，跳过测试');
   }

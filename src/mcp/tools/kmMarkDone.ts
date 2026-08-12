@@ -28,22 +28,30 @@ export const kmMarkDoneTool = {
         description:
           '可选，由 km_list_todos 返回的文件版本 kmRevision；传入时若文件已被并发修改则拒绝写入',
       },
+      executionId: {
+        type: 'string',
+        description: '可选，已通过 km_record_session 绑定的 executionId；提供时原子写入 completed 会话终态',
+      },
+      summary: { type: 'string', maxLength: 4096 },
     },
     required: ['filePath', 'nodeIds'],
   },
 };
 
-export function handleKmMarkDone(args: {
+export async function handleKmMarkDone(args: {
   filePath: string;
   nodeIds: string[];
   dryRun?: boolean;
   expectedRevision?: string;
+  executionId?: string;
+  summary?: string;
 }) {
-  const result = markNodesDone(
+  const result = await markNodesDone(
     args.filePath,
     args.nodeIds,
     args.dryRun ?? false,
-    args.expectedRevision
+    args.expectedRevision,
+    args.executionId ? { executionId: args.executionId, summary: args.summary } : undefined
   );
   return {
     content: [

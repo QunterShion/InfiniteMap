@@ -2,7 +2,7 @@
  * km_list_todos 工具：筛选所有 resource 包含 待拆解 的节点，
  * 返回文件版本，并标注叶子待办与租约认领状态
  */
-import { listTodosWithRevision } from '../services/kmFileReader';
+import { listTodosWithRevisionAndDoc } from '../services/kmFileReader';
 import { readExecState, isLeaseActive, collectLeafTodos } from '../services/kmExecState';
 
 export const kmListTodosTool = {
@@ -21,10 +21,11 @@ export const kmListTodosTool = {
   },
 };
 
-export function handleKmListTodos(args: { filePath: string }) {
-  const todoList = listTodosWithRevision(args.filePath);
-  const execState = readExecState(todoList.filePath);
-  const leafIds = new Set(collectLeafTodos(todoList.filePath).map((leaf) => leaf.nodeId));
+export async function handleKmListTodos(args: { filePath: string }) {
+  // 单次读文件拿到 todos + doc，避免 collectLeafTodos 再次读盘（MCP-P1-02）
+  const { doc, ...todoList } = await listTodosWithRevisionAndDoc(args.filePath);
+  const execState = await readExecState(todoList.filePath);
+  const leafIds = new Set((await collectLeafTodos(todoList.filePath, doc)).map((leaf) => leaf.nodeId));
 
   const todos = todoList.todos.map((todo) => {
     const entry = execState.tasks[todo.nodeId];

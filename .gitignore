@@ -4,6 +4,7 @@ dist
 lib
 config
 node_modules
+resources/provider-sdks/
 .vscode-test/
 webui/node_modules
 webui/bower_components

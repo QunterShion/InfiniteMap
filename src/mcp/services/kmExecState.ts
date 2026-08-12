@@ -10,17 +10,30 @@ import * as crypto from 'crypto';
 import {
   readKmFile,
   getKmFileRevision,
+  KmDocument,
   KmNode,
   KM_TODO_LABEL,
   KM_DONE_LABEL,
 } from './kmFileReader';
+import { atomicWriteJsonFile, withKmFileLock } from './kmFileLock';
+import {
+  commitTerminalSessionUpdate,
+  prepareTerminalSessionUpdate,
+  SessionArtifact,
+  SessionError,
+} from './kmSessionState';
+export {
+  atomicWriteJsonFile,
+  getLockPath,
+  LOCK_EXPIRE_MS,
+  LOCK_RETRY_INTERVAL_MS,
+  LOCK_RETRY_LIMIT,
+  withKmFileLock,
+} from './kmFileLock';
 
 export const EXEC_SCHEMA_VERSION = 1;
 export const DEFAULT_LEASE_SECONDS = 600;
 export const DEFAULT_CLAIM_LIMIT = 5;
-export const LOCK_EXPIRE_MS = 10_000;
-export const LOCK_RETRY_INTERVAL_MS = 50;
-export const LOCK_RETRY_LIMIT = 40;
 
 export type ExecTaskState = 'claimed' | 'done' | 'released' | 'failed';
 export type ExecTaskKind = 'todo' | 'collaboration';
@@ -84,96 +97,6 @@ export function getExecStatePath(kmPath: string): string {
   return path.resolve(kmPath) + '.exec.json';
 }
 
-export function getLockPath(kmPath: string): string {
-  return path.resolve(kmPath) + '.lock';
-}
-
-/** 同步睡眠，用于文件锁自旋等待 */
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * 原子写入文件：临时文件写入 + JSON 解析校验 + 同目录 rename 替换
- */
-export function atomicWriteJsonFile(filePath: string, content: string): void {
-  const resolved = path.resolve(filePath);
-  const tmpPath = `${resolved}.tmp-${process.pid}-${Date.now().toString(36)}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
-
-  try {
-    fs.writeFileSync(tmpPath, content, 'utf-8');
-    JSON.parse(fs.readFileSync(tmpPath, 'utf-8'));
-    fs.renameSync(tmpPath, resolved);
-  } catch (e) {
-    try {
-      if (fs.existsSync(tmpPath)) {
-        fs.unlinkSync(tmpPath);
-      }
-    } catch {
-      // 清理失败不掩盖原始错误
-    }
-    throw new Error(`文件写入失败: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
-/**
- * 获取 KM 文件的跨进程旁车锁并在临界区内执行；退出时释放锁。
- * 锁通过原子创建（wx）获得，持有超过 LOCK_EXPIRE_MS 视为残留，可被抢占清理。
- */
-export function withKmFileLock<T>(kmPath: string, fn: () => T): T {
-  const lockPath = getLockPath(kmPath);
-  let acquired = false;
-
-  for (let attempt = 0; attempt < LOCK_RETRY_LIMIT; attempt++) {
-    try {
-      const fd = fs.openSync(lockPath, 'wx');
-      fs.writeFileSync(
-        fd,
-        JSON.stringify({
-          pid: process.pid,
-          acquiredAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + LOCK_EXPIRE_MS).toISOString(),
-        })
-      );
-      fs.closeSync(fd);
-      acquired = true;
-      break;
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') {
-        throw e;
-      }
-      // 已有锁：检测是否为残留锁
-      try {
-        const holder = JSON.parse(fs.readFileSync(lockPath, 'utf-8'));
-        if (holder && typeof holder.expiresAt === 'string' && Date.parse(holder.expiresAt) < Date.now()) {
-          fs.unlinkSync(lockPath);
-          continue;
-        }
-      } catch {
-        // 锁文件损坏或已被释放，下一轮重试
-      }
-      sleepSync(LOCK_RETRY_INTERVAL_MS);
-    }
-  }
-
-  if (!acquired) {
-    throw new Error(`获取 KM 文件锁超时，文件正被其他进程写入: ${getLockPath(kmPath)}`);
-  }
-
-  try {
-    return fn();
-  } finally {
-    try {
-      fs.unlinkSync(lockPath);
-    } catch {
-      // 锁已被过期清理时忽略
-    }
-  }
-}
-
 /** 计算节点自身内容哈希（id + 文本 + 排序后标签），用于完成时检测节点被并发修改 */
 export function getNodeHash(node: KmNode): string {
   const canonical = JSON.stringify({
@@ -210,31 +133,57 @@ export function getSubtreeHash(node: KmNode): string {
     .digest('hex');
 }
 
-/** 读取旁车执行状态；文件不存在或损坏时返回空状态（可从 KM 重建） */
-export function readExecState(kmPath: string): ExecState {
-  const execPath = getExecStatePath(kmPath);
-  if (!fs.existsSync(execPath)) {
-    return { schemaVersion: EXEC_SCHEMA_VERSION, kmRevision: '', tasks: {} };
-  }
-
-  try {
-    const state = JSON.parse(fs.readFileSync(execPath, 'utf-8')) as ExecState;
-    if (!state || typeof state !== 'object' || typeof state.tasks !== 'object') {
-      return { schemaVersion: EXEC_SCHEMA_VERSION, kmRevision: '', tasks: {} };
+/**
+ * 旁车文件 JSON 损坏时抛出此错误。
+ * 调用方应将其作为工具级错误透传，而非静默降级为空状态——
+ * 空状态会让租约保护失效，导致并发写入冲突。
+ */
+export class KmCorruptedSidecarError extends Error {
+  public readonly execPath: string;
+  constructor(execPath: string, cause: unknown) {
+    super(`旁车文件损坏，无法读取执行状态，请检查或删除后重试: ${execPath}`);
+    this.name = 'KmCorruptedSidecarError';
+    this.execPath = execPath;
+    if (cause instanceof Error) {
+      (this as any).cause = cause;
     }
-    return {
-      schemaVersion: state.schemaVersion || EXEC_SCHEMA_VERSION,
-      kmRevision: state.kmRevision || '',
-      tasks: state.tasks || {},
-    };
-  } catch {
-    return { schemaVersion: EXEC_SCHEMA_VERSION, kmRevision: '', tasks: {} };
   }
 }
 
+/** 读取旁车执行状态。文件不存在返回空状态；文件存在但损坏则抛出 KmCorruptedSidecarError */
+export async function readExecState(kmPath: string): Promise<ExecState> {
+  const execPath = getExecStatePath(kmPath);
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(execPath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { schemaVersion: EXEC_SCHEMA_VERSION, kmRevision: '', tasks: {} };
+    }
+    throw new KmCorruptedSidecarError(execPath, err);
+  }
+
+  let state: ExecState;
+  try {
+    state = JSON.parse(raw) as ExecState;
+  } catch (err) {
+    throw new KmCorruptedSidecarError(execPath, err);
+  }
+
+  if (!state || typeof state !== 'object' || typeof state.tasks !== 'object') {
+    throw new KmCorruptedSidecarError(execPath, new Error('缺失必要字段 tasks'));
+  }
+
+  return {
+    schemaVersion: state.schemaVersion || EXEC_SCHEMA_VERSION,
+    kmRevision: state.kmRevision || '',
+    tasks: state.tasks || {},
+  };
+}
+
 /** 写入旁车执行状态（原子替换） */
-export function writeExecState(kmPath: string, state: ExecState): void {
-  atomicWriteJsonFile(getExecStatePath(kmPath), JSON.stringify(state, null, 2));
+export async function writeExecState(kmPath: string, state: ExecState): Promise<void> {
+  await atomicWriteJsonFile(getExecStatePath(kmPath), JSON.stringify(state, null, 2));
 }
 
 /** 判断任务条目是否持有有效租约 */
@@ -260,9 +209,11 @@ function subtreeHasTodo(node: KmNode): boolean {
 /**
  * 收集叶子待办：带"待拆解"且子树中不再包含其他待拆解节点。
  * 父级待办不进入认领批次，由协调者在子任务全部完成后单独汇总。
+ * @param kmPath KM 文件路径
+ * @param doc 可选，调用方已解析的文档对象；传入可省去一次读盘（MCP-P1-02）
  */
-export function collectLeafTodos(kmPath: string): LeafTodo[] {
-  const doc = readKmFile(kmPath);
+export async function collectLeafTodos(kmPath: string, doc?: KmDocument): Promise<LeafTodo[]> {
+  const actualDoc = doc ?? await readKmFile(kmPath);
   const leaves: LeafTodo[] = [];
 
   function traverse(node: KmNode, segments: string[]): void {
@@ -282,7 +233,7 @@ export function collectLeafTodos(kmPath: string): LeafTodo[] {
     }
   }
 
-  traverse(doc.root, []);
+  traverse(actualDoc.root, []);
   return leaves;
 }
 
@@ -290,7 +241,7 @@ export function collectLeafTodos(kmPath: string): LeafTodo[] {
  * 认领一批叶子待办：写入租约后返回 claimId 与节点快照哈希。
  * 认领失败（版本不符、目标不可认领）时不修改任何状态。
  */
-export function claimTodos(
+export async function claimTodos(
   kmPath: string,
   workerId: string,
   options: {
@@ -299,15 +250,15 @@ export function claimTodos(
     leaseSeconds?: number;
     expectedKmRevision?: string;
   } = {}
-): ClaimResult {
+): Promise<ClaimResult> {
   const resolved = path.resolve(kmPath);
   const worker = (workerId || '').trim();
   if (!worker) {
     throw new Error('workerId 不能为空');
   }
 
-  return withKmFileLock(resolved, () => {
-    const kmRevision = getKmFileRevision(resolved);
+  return withKmFileLock(resolved, async () => {
+    const kmRevision = await getKmFileRevision(resolved);
     const expected = options.expectedKmRevision?.trim();
     if (expected && expected !== kmRevision) {
       throw new Error(
@@ -315,9 +266,9 @@ export function claimTodos(
       );
     }
 
-    const execState = readExecState(resolved);
+    const execState = await readExecState(resolved);
     const now = Date.now();
-    const leafTodos = collectLeafTodos(resolved);
+    const leafTodos = await collectLeafTodos(resolved);
     const eligible = leafTodos.filter((leaf) => !isLeaseActive(execState.tasks[leaf.nodeId], now));
 
     let targets: LeafTodo[];
@@ -369,7 +320,7 @@ export function claimTodos(
       };
     }
     execState.kmRevision = kmRevision;
-    writeExecState(resolved, execState);
+    await writeExecState(resolved, execState);
 
     return {
       filePath: resolved,
@@ -401,16 +352,16 @@ function findClaimEntries(
 /**
  * 续租：仅原 workerId 可续租，租约过期后不可续租（任务已回到待认领状态）
  */
-export function renewClaim(
+export async function renewClaim(
   kmPath: string,
   claimId: string,
   workerId: string,
   leaseSeconds: number = DEFAULT_LEASE_SECONDS
-): { filePath: string; renewedCount: number; leaseUntil: string } {
+): Promise<{ filePath: string; renewedCount: number; leaseUntil: string }> {
   const resolved = path.resolve(kmPath);
 
-  return withKmFileLock(resolved, () => {
-    const execState = readExecState(resolved);
+  return withKmFileLock(resolved, async () => {
+    const execState = await readExecState(resolved);
     const entries = findClaimEntries(execState, claimId);
     if (entries.length === 0) {
       throw new Error(`未找到处于认领状态的任务，claimId: ${claimId}`);
@@ -431,7 +382,7 @@ export function renewClaim(
     for (const { entry } of entries) {
       entry.leaseUntil = leaseUntil;
     }
-    writeExecState(resolved, execState);
+    await writeExecState(resolved, execState);
 
     return { filePath: resolved, renewedCount: entries.length, leaseUntil };
   });
@@ -441,16 +392,22 @@ export function renewClaim(
  * 完成认领：锁内校验租约有效、节点仍存在、节点哈希与认领时一致且仍为待拆解，
  * 校验通过后仅修改这些节点标签并原子写回，再把旁车状态置为 done。
  */
-export function completeClaim(
+export async function completeClaim(
   kmPath: string,
   claimId: string,
   nodeIds?: string[],
-  dryRun: boolean = false
-): CompleteClaimResult {
+  dryRun: boolean = false,
+  sessionUpdate?: {
+    executionId: string;
+    summary?: string;
+    artifacts?: SessionArtifact[];
+    error?: SessionError;
+  }
+): Promise<CompleteClaimResult> {
   const resolved = path.resolve(kmPath);
 
-  return withKmFileLock(resolved, () => {
-    const execState = readExecState(resolved);
+  return withKmFileLock(resolved, async () => {
+    const execState = await readExecState(resolved);
     const entries = findClaimEntries(execState, claimId);
     if (entries.length === 0) {
       throw new Error(`未找到处于认领状态的任务，claimId: ${claimId}`);
@@ -476,8 +433,8 @@ export function completeClaim(
       }
     }
 
-    const revisionBefore = getKmFileRevision(resolved);
-    const doc = readKmFile(resolved);
+    const revisionBefore = await getKmFileRevision(resolved);
+    const doc = await readKmFile(resolved);
     const nodeIndex = new Map<string, KmNode>();
 
     function index(node: KmNode): void {
@@ -507,6 +464,16 @@ export function completeClaim(
       }
     }
 
+    const preparedSession = sessionUpdate
+      ? await prepareTerminalSessionUpdate(resolved, doc, {
+          ...sessionUpdate,
+          status: 'completed',
+        })
+      : undefined;
+    if (preparedSession && !targets.includes(preparedSession.nodeId)) {
+      throw new Error(`executionId 对应节点不属于本次完成目标: ${preparedSession.nodeId}`);
+    }
+
     if (dryRun) {
       return {
         filePath: resolved,
@@ -527,8 +494,8 @@ export function completeClaim(
       ];
     }
 
-    atomicWriteJsonFile(resolved, JSON.stringify(doc, null, 4));
-    const revisionAfter = getKmFileRevision(resolved);
+    await atomicWriteJsonFile(resolved, JSON.stringify(doc, null, 4));
+    const revisionAfter = await getKmFileRevision(resolved);
 
     const doneAt = new Date(now).toISOString();
     for (const nodeId of targets) {
@@ -538,11 +505,14 @@ export function completeClaim(
       entry.completedBy = 'claim';
     }
     execState.kmRevision = revisionAfter;
-    writeExecState(resolved, execState);
+    await writeExecState(resolved, execState);
+    if (preparedSession) {
+      await commitTerminalSessionUpdate(resolved, preparedSession, revisionAfter);
+    }
 
     let verified = false;
     try {
-      const verifyDoc = readKmFile(resolved);
+      const verifyDoc = await readKmFile(resolved);
       let verifyCount = 0;
       function verify(node: KmNode): void {
         if (targets.includes(node.data.id)) {
@@ -579,15 +549,27 @@ export function completeClaim(
  * 释放认领：不带 failReason 时记为 released，带 failReason 时记为 failed；
  * 两种情况下 KM 节点标签都保持不变，可被重新认领。
  */
-export function releaseClaim(
+export async function releaseClaim(
   kmPath: string,
   claimId: string,
-  options: { nodeIds?: string[]; failReason?: string } = {}
-): { filePath: string; releasedCount: number; state: ExecTaskState } {
+  options: {
+    nodeIds?: string[];
+    failReason?: string;
+    dryRun?: boolean;
+    sessionUpdate?: { executionId: string; summary?: string; error?: SessionError };
+  } = {}
+): Promise<{
+  filePath: string;
+  dryRun: boolean;
+  releasedCount: number;
+  state: ExecTaskState;
+  revisionBefore: string;
+  revisionAfter: string;
+}> {
   const resolved = path.resolve(kmPath);
 
-  return withKmFileLock(resolved, () => {
-    const execState = readExecState(resolved);
+  return withKmFileLock(resolved, async () => {
+    const execState = await readExecState(resolved);
     const entries = findClaimEntries(execState, claimId);
     if (entries.length === 0) {
       throw new Error(`未找到处于认领状态的任务，claimId: ${claimId}`);
@@ -604,6 +586,31 @@ export function releaseClaim(
     const failReason = options.failReason?.trim();
     const nowIso = new Date().toISOString();
     const nextState: ExecTaskState = failReason ? 'failed' : 'released';
+    const revisionBefore = await getKmFileRevision(resolved);
+    const doc = options.sessionUpdate ? await readKmFile(resolved) : undefined;
+    const preparedSession = options.sessionUpdate && doc
+      ? await prepareTerminalSessionUpdate(resolved, doc, {
+          ...options.sessionUpdate,
+          status: failReason ? 'failed' : 'cancelled',
+          error: options.sessionUpdate.error || (failReason
+            ? { code: 'TASK_FAILED', message: failReason, retryable: true }
+            : undefined),
+        })
+      : undefined;
+    if (preparedSession && !targets.includes(preparedSession.nodeId)) {
+      throw new Error(`executionId 对应节点不属于本次释放目标: ${preparedSession.nodeId}`);
+    }
+
+    if (options.dryRun) {
+      return {
+        filePath: resolved,
+        dryRun: true,
+        releasedCount: targets.length,
+        state: nextState,
+        revisionBefore,
+        revisionAfter: revisionBefore,
+      };
+    }
 
     for (const nodeId of targets) {
       const entry = execState.tasks[nodeId];
@@ -615,8 +622,22 @@ export function releaseClaim(
         entry.releasedAt = nowIso;
       }
     }
-    writeExecState(resolved, execState);
+    let revisionAfter = revisionBefore;
+    if (preparedSession && doc) {
+      await atomicWriteJsonFile(resolved, JSON.stringify(doc, null, 4));
+      revisionAfter = await getKmFileRevision(resolved);
+      await commitTerminalSessionUpdate(resolved, preparedSession, revisionAfter);
+      execState.kmRevision = revisionAfter;
+    }
+    await writeExecState(resolved, execState);
 
-    return { filePath: resolved, releasedCount: targets.length, state: nextState };
+    return {
+      filePath: resolved,
+      dryRun: false,
+      releasedCount: targets.length,
+      state: nextState,
+      revisionBefore,
+      revisionAfter,
+    };
   });
 }

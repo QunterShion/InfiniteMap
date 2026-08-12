@@ -25,6 +25,12 @@ import {
   withKmFileLock,
   writeExecState,
 } from './kmExecState';
+import {
+  commitTerminalSessionUpdate,
+  prepareTerminalSessionUpdate,
+  readSessionState,
+  SessionArtifact,
+} from './kmSessionState';
 
 interface CollaborationCandidate {
   nodeId: string;
@@ -144,7 +150,7 @@ function completeCollaborationNode(node: KmNode): void {
 }
 
 /** 认领一批待协同节点；认领只写旁车，不修改 KM。 */
-export function claimCollaborationTasks(
+export async function claimCollaborationTasks(
   kmPath: string,
   workerId: string,
   options: {
@@ -153,15 +159,15 @@ export function claimCollaborationTasks(
     leaseSeconds?: number;
     expectedFileRevision?: string;
   } = {}
-): CollaborationClaimResult {
+): Promise<CollaborationClaimResult> {
   const resolved = path.resolve(kmPath);
   const worker = (workerId || '').trim();
   if (!worker) {
     throw new Error('workerId 不能为空');
   }
 
-  return withKmFileLock(resolved, () => {
-    const fileRevision = getKmFileRevision(resolved);
+  return withKmFileLock(resolved, async () => {
+    const fileRevision = await getKmFileRevision(resolved);
     const expected = options.expectedFileRevision?.trim();
     if (expected && expected !== fileRevision) {
       throw new Error(
@@ -169,8 +175,8 @@ export function claimCollaborationTasks(
       );
     }
 
-    const doc = readKmFile(resolved);
-    const execState = readExecState(resolved);
+    const doc = await readKmFile(resolved);
+    const execState = await readExecState(resolved);
     const now = Date.now();
     const candidates = collectCollaborationCandidates(doc);
     const eligible = candidates.filter(
@@ -232,7 +238,7 @@ export function claimCollaborationTasks(
       };
     }
     execState.kmRevision = fileRevision;
-    writeExecState(resolved, execState);
+    await writeExecState(resolved, execState);
 
     return {
       filePath: resolved,
@@ -254,12 +260,13 @@ export function claimCollaborationTasks(
 /**
  * 完成一批已认领协同任务。所有目标在锁内一次性校验；任一冲突时零写入。
  */
-export function completeCollaborationClaim(
+export async function completeCollaborationClaim(
   kmPath: string,
   claimId: string,
   tasks: CollaborationCompletionInput[],
-  dryRun: boolean = false
-): CollaborationCompletionResult {
+  dryRun: boolean = false,
+  sessionUpdate?: { executionId: string; summary?: string; artifacts?: SessionArtifact[] }
+): Promise<CollaborationCompletionResult> {
   const resolved = path.resolve(kmPath);
   if (!Array.isArray(tasks) || tasks.length === 0) {
     throw new Error('tasks 必须至少包含一个待完成的协同任务');
@@ -273,8 +280,8 @@ export function completeCollaborationClaim(
     childTexts: normalizeChildTexts(task.nodeId, task.childTexts),
   }));
 
-  return withKmFileLock(resolved, () => {
-    const execState = readExecState(resolved);
+  return withKmFileLock(resolved, async () => {
+    const execState = await readExecState(resolved);
     const claimEntries = Object.entries(execState.tasks)
       .filter(
         ([, entry]) =>
@@ -304,8 +311,8 @@ export function completeCollaborationClaim(
       }
     }
 
-    const revisionBefore = getKmFileRevision(resolved);
-    const doc = readKmFile(resolved);
+    const revisionBefore = await getKmFileRevision(resolved);
+    const doc = await readKmFile(resolved);
     const nodeIndex = new Map<string, KmNode>();
     const existingIds = new Set<string>();
     indexNodes(doc.root, nodeIndex, existingIds);
@@ -355,6 +362,32 @@ export function completeCollaborationClaim(
       parentCompleted: true,
     }));
 
+    const sessionPlan = sessionUpdate
+      ? plans.find((plan) => {
+          const state = readSessionState(resolved);
+          return state.executions[sessionUpdate.executionId]?.nodeId === plan.nodeId;
+        })
+      : undefined;
+    if (sessionUpdate && !sessionPlan) {
+      throw new Error('executionId 对应节点不属于本次协同完成目标');
+    }
+    if (sessionPlan && sessionUpdate) {
+      for (const child of sessionPlan.childNodes) {
+        child.data.infiniteMap = {
+          schemaVersion: 1,
+          originExecutionId: sessionUpdate.executionId,
+        };
+      }
+    }
+    const preparedSession = sessionUpdate && sessionPlan
+      ? await prepareTerminalSessionUpdate(resolved, doc, {
+          ...sessionUpdate,
+          nodeId: sessionPlan.nodeId,
+          status: 'completed',
+          generatedNodeIds: sessionPlan.childNodes.map((child) => child.data.id),
+        })
+      : undefined;
+
     if (dryRun) {
       return {
         filePath: resolved,
@@ -375,8 +408,8 @@ export function completeCollaborationClaim(
       completeCollaborationNode(node);
     }
 
-    atomicWriteJsonFile(resolved, JSON.stringify(doc, null, 4));
-    const revisionAfter = getKmFileRevision(resolved);
+    await atomicWriteJsonFile(resolved, JSON.stringify(doc, null, 4));
+    const revisionAfter = await getKmFileRevision(resolved);
     const doneAt = new Date(now).toISOString();
     for (const plan of plans) {
       const entry = execState.tasks[plan.nodeId];
@@ -386,11 +419,14 @@ export function completeCollaborationClaim(
       entry.generatedNodeIds = plan.childNodes.map((child) => child.data.id);
     }
     execState.kmRevision = revisionAfter;
-    writeExecState(resolved, execState);
+    await writeExecState(resolved, execState);
+    if (preparedSession) {
+      await commitTerminalSessionUpdate(resolved, preparedSession, revisionAfter);
+    }
 
     let verified = false;
     try {
-      const verifyDoc = readKmFile(resolved);
+      const verifyDoc = await readKmFile(resolved);
       const verifyIndex = new Map<string, KmNode>();
       const verifyIds = new Set<string>();
       indexNodes(verifyDoc.root, verifyIndex, verifyIds);

@@ -23,7 +23,7 @@ function createNode(id, children = []) {
   };
 }
 
-test('marks a selected parent and its selected descendants in one batch', (t) => {
+test('marks a selected parent and its selected descendants in one batch', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-writer-'));
   const filePath = path.join(directory, 'fixture.json');
   const nodeIds = ['parent', 'child-a', 'child-b'];
@@ -37,11 +37,11 @@ test('marks a selected parent and its selected descendants in one batch', (t) =>
   fs.writeFileSync(filePath, JSON.stringify(document), 'utf8');
 
   const before = fs.readFileSync(filePath, 'utf8');
-  const dryRun = markNodesDone(filePath, nodeIds, true);
+  const dryRun = await markNodesDone(filePath, nodeIds, true);
   assert.equal(dryRun.modified, 3);
   assert.equal(fs.readFileSync(filePath, 'utf8'), before);
 
-  const result = markNodesDone(filePath, nodeIds, false);
+  const result = await markNodesDone(filePath, nodeIds, false);
   assert.equal(result.modified, 3);
   assert.equal(result.verified, true);
   assert.deepEqual(listTodos(filePath).map((todo) => todo.nodeId), ['root']);
@@ -53,7 +53,7 @@ test('marks a selected parent and its selected descendants in one batch', (t) =>
   assert.deepEqual(parent.children[1].data.resource, [DONE]);
 });
 
-test('list todos returns kmRevision matching the current file content', (t) => {
+test('list todos returns kmRevision matching the current file content', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-writer-'));
   const filePath = path.join(directory, 'fixture.json');
   const document = { root: createNode('root', [createNode('leaf')]) };
@@ -67,11 +67,11 @@ test('list todos returns kmRevision matching the current file content', (t) => {
   assert.equal(todoList.kmRevision, getKmFileRevision(filePath));
 
   // 文件内容变化后版本必须变化
-  markNodesDone(filePath, ['leaf'], false);
+  await markNodesDone(filePath, ['leaf'], false);
   assert.notEqual(listTodosWithRevision(filePath).kmRevision, todoList.kmRevision);
 });
 
-test('mark done with matching expectedRevision succeeds and returns new revision', (t) => {
+test('mark done with matching expectedRevision succeeds and returns new revision', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-writer-'));
   const filePath = path.join(directory, 'fixture.json');
   const document = { root: createNode('root', [createNode('leaf')]) };
@@ -80,7 +80,7 @@ test('mark done with matching expectedRevision succeeds and returns new revision
   fs.writeFileSync(filePath, JSON.stringify(document), 'utf8');
 
   const { kmRevision } = listTodosWithRevision(filePath);
-  const result = markNodesDone(filePath, ['leaf'], false, kmRevision);
+  const result = await markNodesDone(filePath, ['leaf'], false, kmRevision);
   assert.equal(result.modified, 1);
   assert.equal(result.verified, true);
   assert.equal(result.revisionBefore, kmRevision);
@@ -88,7 +88,7 @@ test('mark done with matching expectedRevision succeeds and returns new revision
   assert.equal(result.revisionAfter, getKmFileRevision(filePath));
 });
 
-test('mark done with stale expectedRevision is rejected without writing', (t) => {
+test('mark done with stale expectedRevision is rejected without writing', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-writer-'));
   const filePath = path.join(directory, 'fixture.json');
   const document = { root: createNode('root', [createNode('leaf-a'), createNode('leaf-b')]) };
@@ -99,11 +99,11 @@ test('mark done with stale expectedRevision is rejected without writing', (t) =>
   const { kmRevision: staleRevision } = listTodosWithRevision(filePath);
 
   // 模拟并发写入者先完成 leaf-a，文件版本随之变化
-  markNodesDone(filePath, ['leaf-a'], false);
+  await markNodesDone(filePath, ['leaf-a'], false);
   const contentAfterConcurrent = fs.readFileSync(filePath, 'utf8');
 
-  assert.throws(
-    () => markNodesDone(filePath, ['leaf-b'], false, staleRevision),
+  await assert.rejects(
+    markNodesDone(filePath, ['leaf-b'], false, staleRevision),
     /KM 文件版本已变化/
   );
   // 冲突拒绝时不得写入任何内容
@@ -111,7 +111,7 @@ test('mark done with stale expectedRevision is rejected without writing', (t) =>
   assert.deepEqual(listTodos(filePath).map((todo) => todo.nodeId), ['root', 'leaf-b']);
 });
 
-test('mark done without expectedRevision keeps legacy behavior', (t) => {
+test('mark done without expectedRevision keeps legacy behavior', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-writer-'));
   const filePath = path.join(directory, 'fixture.json');
   const document = { root: createNode('root', [createNode('leaf')]) };
@@ -119,12 +119,12 @@ test('mark done without expectedRevision keeps legacy behavior', (t) => {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   fs.writeFileSync(filePath, JSON.stringify(document), 'utf8');
 
-  const result = markNodesDone(filePath, ['leaf'], false);
+  const result = await markNodesDone(filePath, ['leaf'], false);
   assert.equal(result.modified, 1);
   assert.equal(result.verified, true);
 });
 
-test('mark done with empty expectedRevision string is rejected', (t) => {
+test('mark done with empty expectedRevision string is rejected', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-writer-'));
   const filePath = path.join(directory, 'fixture.json');
   const document = { root: createNode('root', [createNode('leaf')]) };
@@ -132,8 +132,8 @@ test('mark done with empty expectedRevision string is rejected', (t) => {
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   fs.writeFileSync(filePath, JSON.stringify(document), 'utf8');
 
-  assert.throws(
-    () => markNodesDone(filePath, ['leaf'], false, '  '),
+  await assert.rejects(
+    markNodesDone(filePath, ['leaf'], false, '  '),
     /expectedRevision 不能为空字符串/
   );
 });

@@ -394,6 +394,7 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 
 	private async apiKey(): Promise<string | undefined> {
 		return (await this.options.secretStorage?.get(CLAUDE_API_KEY_SECRET))
+			|| this.userConfig.authToken
 			|| process.env.ANTHROPIC_API_KEY;
 	}
 

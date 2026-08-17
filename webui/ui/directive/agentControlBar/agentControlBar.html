@@ -1,84 +1,128 @@
 <section data-component="agent-control-bar"
-         ng-class="{'is-busy': agentControl.busy, 'has-error': agentControl.error}"
+         ng-class="{'is-busy': agentControl.busy, 'has-error': agentControl.error, 'is-collapsed': agentControl.collapsed}"
          aria-label="{{ 'instruction' | agentSessionText }}">
-    <label data-slot="field provider-field">
-        <span data-slot="field-label">{{ 'provider' | agentSessionText }}</span>
-        <select data-slot="select provider-select"
-                ng-model="agentControl.providerId"
-                ng-change="providerChanged()"
-                ng-disabled="agentControl.busy || isProviderInstalling() || agentControl.session.activeTurnId"
-                aria-label="{{ 'provider' | agentSessionText }}">
-            <option ng-repeat="provider in agentControl.providers track by provider.id" value="{{ provider.id }}">
-                {{ providerOptionLabel(provider) }}
-            </option>
-        </select>
-    </label>
-    <label data-slot="field model-field" ng-if="agentControl.models.length">
-        <span data-slot="field-label">{{ 'model' | agentSessionText }}</span>
-        <select data-slot="select model-select"
-                ng-model="agentControl.modelId"
-                ng-change="modelChanged()"
-                ng-disabled="agentControl.busy || agentControl.session.activeTurnId"
-                aria-label="{{ 'model' | agentSessionText }}">
-            <option ng-repeat="model in agentControl.models track by model.id" value="{{ model.id }}">{{ model.label }}</option>
-        </select>
-    </label>
-    <label data-slot="field effort-field" ng-if="agentControl.efforts.length > 1">
-        <span data-slot="field-label">{{ 'effort' | agentSessionText }}</span>
-        <select data-slot="select effort-select"
-                ng-model="agentControl.effort"
-                ng-disabled="agentControl.busy || agentControl.session.activeTurnId"
-                aria-label="{{ 'effort' | agentSessionText }}">
-            <option ng-repeat="effort in agentControl.efforts track by effort.id" value="{{ effort.id }}">{{ effort.label }}</option>
-        </select>
-    </label>
-    <div data-slot="effort-default" ng-if="agentControl.efforts.length === 1">
-        <span data-slot="field-label">{{ 'effort' | agentSessionText }}</span>
-        <span data-slot="readonly-value">{{ 'defaultEffort' | agentSessionText }}</span>
+    <button data-slot="button toggle-collapse-button" type="button"
+            ng-click="toggleCollapse()"
+            aria-controls="agent-control-bar-content"
+            aria-expanded="{{ !agentControl.collapsed }}"
+            aria-label="{{ (agentControl.collapsed ? 'expandControlBar' : 'collapseControlBar') | agentSessionText }}"
+            title="{{ (agentControl.collapsed ? 'expandControlBar' : 'collapseControlBar') | agentSessionText }}">
+        <span data-slot="collapse-icon" aria-hidden="true"></span>
+    </button>
+    <div data-slot="collapsed-status" role="status" aria-live="polite" ng-if="agentControl.collapsed">
+        <span data-slot="collapsed-status-indicator"
+              data-state="{{ agentControl.mcpConnection.state }}" aria-hidden="true"></span>
+        <span>{{ selectedProviderLabel() }}</span>
+        <span aria-hidden="true">·</span>
+        <span ng-if="agentControl.session && agentControl.session.activeTurnId">{{ 'active' | agentSessionText }}</span>
+        <span ng-if="!agentControl.session || !agentControl.session.activeTurnId">{{ 'idle' | agentSessionText }}</span>
     </div>
-    <label data-slot="field instruction-field">
-        <span data-slot="field-label">{{ 'instruction' | agentSessionText }}</span>
-        <input data-slot="input instruction-input"
-               type="text"
-               ng-model="agentControl.input"
-               ng-disabled="agentControl.busy"
-               placeholder="{{ 'instructionPlaceholder' | agentSessionText }}"
-               aria-label="{{ 'instruction' | agentSessionText }}">
-    </label>
-	    <div data-slot="actions">
-			<div data-slot="mcp-connection" data-state="{{ agentControl.mcpConnection.state }}"
-				role="status" aria-live="polite">
-				<span data-slot="mcp-status-indicator" aria-hidden="true"></span>
-				<span data-slot="mcp-status-label">{{ mcpConnectionLabel() }}</span>
-				<button data-slot="button reconnect-mcp-button" type="button"
-					ng-if="agentControl.mcpConnection.state !== 'ready'"
-					ng-disabled="agentControl.mcpConnection.busy"
-					ng-click="reconnectMcp()">{{ 'reconnectMcp' | agentSessionText }}</button>
-			</div>
-			<button data-slot="button provider-install-button" type="button"
-			ng-if="selectedProviderNeedsInstall()" ng-click="requestSelectedProviderInstall()">
-			{{ 'install' | agentSessionText }}
-		</button>
-		<button data-slot="button activity-button" type="button" ng-click="openAgentActivity()">
-			{{ 'activity' | agentSessionText }}
-		</button>
-        <button data-slot="button send-button" type="button"
-                ng-click="sendAgentSession()"
-                ng-disabled="!canSendAgentSession()"
-                ng-class="{'button-loading': agentControl.busy && !agentControl.session.activeTurnId}">
-            <span ng-if="!(agentControl.busy && !agentControl.session.activeTurnId)">{{ 'send' | agentSessionText }}</span>
-            <span ng-if="agentControl.busy && !agentControl.session.activeTurnId">
-                <span data-slot="spinner" aria-hidden="true">⟳</span>
-                {{ 'sending' | agentSessionText }}
-            </span>
-        </button>
-        <button data-slot="button append-button" type="button" ng-click="appendAgentSession()" ng-disabled="!canAppendAgentSession()">
-            {{ 'append' | agentSessionText }}
-        </button>
-        <button data-slot="button interrupt-button" type="button" ng-click="interruptAgentSession()" ng-disabled="!canInterruptAgentSession()">
-            {{ 'interrupt' | agentSessionText }}
-        </button>
-    </div>
+    <div id="agent-control-bar-content" data-slot="control-bar-content" ng-if="!agentControl.collapsed">
+        <div data-slot="composer-shell">
+            <label data-slot="field instruction-field">
+                <span data-slot="visually-hidden">{{ 'instruction' | agentSessionText }}</span>
+                <textarea data-slot="input instruction-input" rows="3"
+                          ng-model="agentControl.input"
+                          ng-keydown="handleComposerKeydown($event)"
+                          ng-disabled="agentControl.busy"
+                          placeholder="{{ 'instructionPlaceholder' | agentSessionText }}"
+                          aria-label="{{ 'instruction' | agentSessionText }}"></textarea>
+            </label>
+            <div data-slot="composer-toolbar">
+                <div data-slot="toolbar-start">
+                    <button data-slot="button activity-button" type="button" ng-click="openAgentActivity()">
+                        {{ 'activity' | agentSessionText }}
+                    </button>
+                    <div data-slot="mcp-connection" data-state="{{ agentControl.mcpConnection.state }}"
+                         role="status" aria-live="polite" title="{{ mcpConnectionLabel() }}">
+                        <span data-slot="mcp-status-indicator" aria-hidden="true"></span>
+                        <span data-slot="mcp-status-label">{{ mcpConnectionLabel() }}</span>
+                        <button data-slot="button reconnect-mcp-button" type="button"
+                                ng-if="agentControl.mcpConnection.state !== 'ready'"
+                                ng-disabled="agentControl.mcpConnection.busy"
+                                ng-click="reconnectMcp()">{{ 'reconnectMcp' | agentSessionText }}</button>
+                    </div>
+                    <div data-slot="provider-dock">
+                        <button data-slot="button provider-trigger" type="button"
+                                ng-click="toggleProviderMenu()"
+                                ng-disabled="agentControl.busy || isProviderInstalling() || agentControl.session.activeTurnId"
+                                aria-haspopup="menu" aria-expanded="{{ agentControl.providerMenuOpen }}"
+                                aria-label="{{ 'switchProvider' | agentSessionText }}">
+                            <span data-slot="provider-device-icon" aria-hidden="true"></span>
+                            <span>{{ selectedProviderLabel() }}</span>
+                            <span data-slot="menu-chevron" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                    <button data-slot="button provider-install-button" type="button"
+                            ng-if="selectedProviderNeedsInstall()" ng-click="requestSelectedProviderInstall()">
+                        {{ 'install' | agentSessionText }}
+                    </button>
+                </div>
+                <div data-slot="toolbar-end">
+                    <button data-slot="button config-trigger" type="button"
+                            ng-if="agentControl.models.length"
+                            ng-click="toggleConfigMenu()"
+                            ng-disabled="agentControl.busy || agentControl.session.activeTurnId"
+                            aria-haspopup="menu" aria-expanded="{{ agentControl.configMenuOpen }}">
+                        <span data-slot="bolt-icon" aria-hidden="true">ϟ</span>
+                        <span data-slot="config-summary">{{ configurationLabel() }}</span>
+                        <span data-slot="menu-chevron" aria-hidden="true"></span>
+                    </button>
+                    <button data-slot="button primary-action-button" type="button"
+                            ng-click="handlePrimaryAction()"
+                            ng-disabled="!canPerformPrimaryAction()"
+                            ng-class="{'button-loading': agentControl.busy && !agentControl.session.activeTurnId}"
+                            data-action-state="{{ getPrimaryActionState() }}"
+                            aria-label="{{ primaryActionLabel() }}" title="{{ primaryActionLabel() }}">
+                        <span data-slot="spinner" aria-hidden="true"
+                              ng-if="getPrimaryActionState() === 'send' && agentControl.busy && !agentControl.session.activeTurnId">⟳</span>
+                        <span data-slot="primary-action-icon" aria-hidden="true"
+                              ng-if="!(getPrimaryActionState() === 'send' && agentControl.busy && !agentControl.session.activeTurnId)"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div data-slot="menu provider-menu" role="menu"
+             aria-label="{{ 'switchProvider' | agentSessionText }}" ng-if="agentControl.providerMenuOpen">
+            <div data-slot="menu-title">{{ 'switchProvider' | agentSessionText }}</div>
+            <button data-slot="button menu-item provider-option" type="button"
+                    ng-repeat="provider in agentControl.providers track by provider.id"
+                    ng-click="selectProviderFromMenu(provider)"
+                    role="menuitemradio" aria-checked="{{ provider.id === agentControl.providerId }}">
+                <span data-slot="provider-status-dot" data-state="{{ provider.installState }}" aria-hidden="true"></span>
+                <span data-slot="menu-item-label">{{ providerOptionLabel(provider) }}</span>
+                <span data-slot="selected-check" ng-if="provider.id === agentControl.providerId" aria-hidden="true">✓</span>
+            </button>
+        </div>
+
+        <div data-slot="menu config-menu" role="menu"
+             aria-label="{{ 'model' | agentSessionText }} · {{ 'effort' | agentSessionText }}"
+             ng-if="agentControl.configMenuOpen">
+            <div data-slot="menu-section" ng-if="agentControl.efforts.length">
+                <div data-slot="menu-title">{{ 'effort' | agentSessionText }}</div>
+                <button data-slot="button menu-item effort-option" type="button"
+                        ng-repeat="effort in agentControl.efforts track by effort.id"
+                        ng-click="selectEffortFromMenu(effort)"
+                        role="menuitemradio" aria-checked="{{ effort.id === agentControl.effort }}">
+                    <span data-slot="menu-item-label">{{ effort.label }}</span>
+                    <span data-slot="selected-check" ng-if="effort.id === agentControl.effort" aria-hidden="true">✓</span>
+                </button>
+            </div>
+            <div data-slot="menu-divider" ng-if="agentControl.efforts.length && agentControl.models.length"></div>
+            <div data-slot="menu-section" ng-if="agentControl.models.length">
+                <div data-slot="menu-title">{{ 'model' | agentSessionText }}</div>
+                <button data-slot="button menu-item model-option" type="button"
+                        ng-repeat="model in agentControl.models track by model.id"
+                        ng-click="selectModelFromMenu(model)"
+                        role="menuitemradio" aria-checked="{{ model.id === agentControl.modelId }}">
+                    <span data-slot="bolt-icon" aria-hidden="true">ϟ</span>
+                    <span data-slot="menu-item-label">{{ model.label }}</span>
+                    <span data-slot="selected-check" ng-if="model.id === agentControl.modelId" aria-hidden="true">✓</span>
+                </button>
+            </div>
+        </div>
+
     <div data-slot="status" role="status" aria-live="polite"
          ng-if="agentControl.error || agentControl.document.dirty || agentControl.document.conflict"
          ng-class="{'status-error': agentControl.error, 'status-warning': !agentControl.error}">
@@ -146,5 +190,6 @@
 			<button data-slot="button deny-button" type="button" ng-click="resolveAgentInput('deny')"
 				ng-disabled="agentControl.inputRequest.resolving">{{ 'deny' | agentSessionText }}</button>
 		</div>
+	</div>
 	</div>
 </section>

@@ -13,9 +13,14 @@ test('agent controls live only in the bottom control bar', () => {
   );
   const card = fs.readFileSync(path.join(root, 'webui/ui/directive/nodeCard/nodeCard.html'), 'utf8');
   assert.match(control, /data-component="agent-control-bar"/);
-  for (const slot of ['provider-select', 'provider-install-button', 'model-select', 'instruction-input', 'send-button', 'append-button', 'interrupt-button']) {
+  for (const slot of ['composer-shell', 'provider-trigger', 'provider-menu', 'config-trigger', 'config-menu', 'instruction-input', 'primary-action-button', 'toggle-collapse-button', 'collapsed-status']) {
     assert.match(control, new RegExp(slot));
   }
+	assert.doesNotMatch(control, /data-slot="button (?:send|append|interrupt)-button"/);
+	assert.doesNotMatch(control, /<select\b/i);
+	assert.match(control, /<textarea[\s\S]*?handleComposerKeydown/);
+	assert.match(control, /data-action-state="\{\{ getPrimaryActionState\(\) \}\}"/);
+	assert.match(control, /'switchProvider' \| agentSessionText/);
 	for (const slot of ['install-progress', 'install-status', 'install-status-indicator', 'retry-install-button']) {
 		assert.match(control, new RegExp(slot));
 	}
@@ -132,14 +137,110 @@ test('a default-selected installed Provider loads models and enables send for a 
   assert.equal(scope.agentControl.providerId, 'codex');
   assert.equal(scope.agentControl.modelId, 'gpt-5.6-codex');
   assert.equal(scope.canSendAgentSession(), true);
+  assert.equal(scope.providerOptionLabel(readyCodex), 'Codex');
+  assert.equal(scope.providerOptionLabel(installedCodex), 'Codex · installed_inactive');
+});
+
+test('primary action and collapse controls follow the current session state', () => {
+  let directiveFactory;
+  const moduleApi = {
+    directive(name, definition) {
+      if (name === 'agentControlBar') directiveFactory = definition.at(-1);
+      return moduleApi;
+    }
+  };
+  vm.runInNewContext(
+    fs.readFileSync(path.join(root, 'webui/ui/directive/agentControlBar/agentControlBar.directive.js'), 'utf8'),
+    {
+      angular: { module: () => moduleApi },
+      CustomEvent: function CustomEvent() {},
+      document: { dispatchEvent() {} },
+      window: {}
+    }
+  );
+  const resolved = (value) => ({ then: (success) => success(value) });
+  const sessionService = {
+    getSnapshot: () => ({ providers: [], session: null, document: { dirty: false, conflict: false } }),
+    discoverProviders: () => resolved({ providers: [], session: null, document: { dirty: false, conflict: false } }),
+    normalizeSession: (value) => value
+  };
+  const scope = { $on() {} };
+  directiveFactory(sessionService, { t: (key) => key }).link(scope);
+  scope.agentControl.busy = false;
+  const providers = [
+    {
+      id: 'codex', displayName: 'Codex', installState: 'ready',
+      models: [{ id: 'gpt-5.6-codex', label: 'GPT-5.6 Codex', defaultEffort: 'high', effortOptions: [
+        { id: 'medium', label: '中' }, { id: 'high', label: '高' }
+      ] }]
+    },
+    {
+      id: 'claudecode', displayName: 'Claude Code', installState: 'ready',
+      models: [{ id: 'claude-opus-4-1', label: 'Claude Opus 4.1', effortOptions: [] }]
+    }
+  ];
+  scope.agentControl.providers = providers;
+  scope.agentControl.providerId = 'codex';
+  scope.providerChanged();
+
+  assert.equal(scope.selectedProviderLabel(), 'Codex');
+  assert.equal(scope.configurationLabel(), 'GPT-5.6 Codex · 高');
+  scope.toggleProviderMenu();
+  assert.equal(scope.agentControl.providerMenuOpen, true);
+  scope.toggleConfigMenu();
+  assert.equal(scope.agentControl.providerMenuOpen, false);
+  assert.equal(scope.agentControl.configMenuOpen, true);
+  scope.selectEffortFromMenu({ id: 'medium', label: '中' });
+  assert.equal(scope.agentControl.effort, 'medium');
+  assert.equal(scope.agentControl.configMenuOpen, false);
+  scope.selectProviderFromMenu(providers[1]);
+  assert.equal(scope.agentControl.providerId, 'claudecode');
+  assert.equal(scope.agentControl.modelId, 'claude-opus-4-1');
+  assert.equal(scope.selectedProviderLabel(), 'Claude Code');
+  scope.selectProviderFromMenu(providers[0]);
+
+  assert.equal(scope.agentControl.collapsed, false);
+  scope.toggleProviderMenu();
+  scope.toggleCollapse();
+  assert.equal(scope.agentControl.collapsed, true);
+  assert.equal(scope.agentControl.providerMenuOpen, false);
+  scope.toggleCollapse();
+  assert.equal(scope.agentControl.collapsed, false);
+
+  const calls = [];
+  scope.sendAgentSession = () => calls.push('send');
+  scope.appendAgentSession = () => calls.push('append');
+  scope.interruptAgentSession = () => calls.push('interrupt');
+
+  assert.equal(scope.getPrimaryActionState(), 'send');
+  assert.equal(scope.canPerformPrimaryAction(), true);
+  scope.handlePrimaryAction();
+
+  scope.agentControl.session = { activeTurnId: null };
+  assert.equal(scope.getPrimaryActionState(), 'append');
+  assert.equal(scope.canPerformPrimaryAction(), true);
+  scope.handlePrimaryAction();
+
+  scope.agentControl.session.activeTurnId = 'turn-1';
+  assert.equal(scope.getPrimaryActionState(), 'interrupt');
+  assert.equal(scope.canPerformPrimaryAction(), true);
+  scope.handlePrimaryAction();
+
+  assert.deepEqual(calls, ['send', 'append', 'interrupt']);
 });
 
 test('agent-session UI uses semantic tokens and ships the 21-language union', () => {
   const styles = fs.readFileSync(path.join(root, 'webui/less/agentSession.less'), 'utf8');
+  const composerStyles = fs.readFileSync(path.join(root, 'webui/less/agentComposer.less'), 'utf8');
   const nodeStyles = fs.readFileSync(path.join(root, 'webui/less/nodeCard.less'), 'utf8');
   const i18n = fs.readFileSync(path.join(root, 'webui/ui/service/agentSessionI18n.service.js'), 'utf8');
   assert.doesNotMatch(styles, /#[0-9a-f]{3,8}|rgba?\(|hsla?\(|\d+(?:\.\d+)?(?:px|rem)/i);
   assert.doesNotMatch(styles, /transition-all/);
+  assert.doesNotMatch(composerStyles, /#[0-9a-f]{3,8}|rgba?\(|hsla?\(|\d+(?:\.\d+)?(?:px|rem)/i);
+  assert.doesNotMatch(composerStyles, /transition-all/);
+	for (const slot of ['composer-shell', 'instruction-input', 'provider-trigger', 'config-trigger', 'menu-item', 'primary-action-button']) {
+		assert.match(composerStyles, new RegExp(`data-slot(?:~)?=["']${slot}["']`));
+	}
 	assert.match(styles, /@container \(max-width: 100ch\)[\s\S]*?bottom: ~"calc\(var\(--spacing\) \* 80\)";[\s\S]*?\.node-card \{ bottom: ~"calc\(var\(--spacing\) \* 108\)"; \}/);
 	assert.match(styles, /\[data-component="agent-session-history"\][\s\S]*?bottom: ~"calc\(var\(--spacing\) \* 28\)";/);
 	assert.match(styles, /\[data-component="agent-activity-overview"\][\s\S]*?bottom: ~"calc\(var\(--spacing\) \* 28\)";/);

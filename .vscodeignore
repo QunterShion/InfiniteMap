@@ -8,8 +8,30 @@ src/**
 types/**
 config
 
-node_modules
-!node_modules/@modelcontextprotocol/sdk/**
+# 暂时注释掉 node_modules 排除，包含所有依赖
+# node_modules
+# !node_modules/@modelcontextprotocol/**
+# !node_modules/@hono/**
+# !node_modules/zod/**
+# !node_modules/zod-to-json-schema/**
+# !node_modules/ajv/**
+# !node_modules/ajv-formats/**
+# !node_modules/eventsource/**
+# !node_modules/eventsource-parser/**
+# !node_modules/cross-spawn/**
+# !node_modules/json-schema-typed/**
+# !node_modules/express/**
+# !node_modules/express-rate-limit/**
+# !node_modules/hono/**
+# !node_modules/jose/**
+# !node_modules/raw-body/**
+# !node_modules/content-type/**
+# !node_modules/cors/**
+# !node_modules/pkce-challenge/**
+# !node_modules/fast-deep-equal/**
+# !node_modules/json-schema-traverse/**
+# !node_modules/require-from-string/**
+# !node_modules/uri-js/**
 
 .gitignore
 tsconfig.json

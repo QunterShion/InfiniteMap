@@ -20,7 +20,10 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 					installation: null,
 					authCandidate: null,
 					inputRequest: null,
-					mcpConnection: { state: 'connecting', attempt: 0, retryable: true, busy: false }
+					mcpConnection: { state: 'connecting', attempt: 0, retryable: true, busy: false },
+					collapsed: false,
+					providerMenuOpen: false,
+					configMenuOpen: false
 				};
 
 				function statusLabel(provider) {
@@ -141,7 +144,67 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 				}
 
 				scope.providerOptionLabel = function(provider) {
+					if (provider.installState === 'ready') {
+						return provider.displayName;
+					}
 					return provider.displayName + ' · ' + statusLabel(provider);
+				};
+
+				scope.selectedProviderLabel = function() {
+					var provider = selectedProvider();
+					return provider ? provider.displayName : agentSessionI18n.t('switchProvider');
+				};
+
+				scope.selectedModelLabel = function() {
+					var model = scope.agentControl.models.find(function(candidate) {
+						return candidate.id === scope.agentControl.modelId;
+					});
+					return model ? model.label : agentSessionI18n.t('defaultModel');
+				};
+
+				scope.selectedEffortLabel = function() {
+					var effort = scope.agentControl.efforts.find(function(candidate) {
+						return candidate.id === scope.agentControl.effort;
+					});
+					return effort && effort.label || '';
+				};
+
+				scope.configurationLabel = function() {
+					var effort = scope.selectedEffortLabel();
+					return scope.selectedModelLabel() + (effort ? ' · ' + effort : '');
+				};
+
+				scope.toggleCollapse = function() {
+					scope.agentControl.providerMenuOpen = false;
+					scope.agentControl.configMenuOpen = false;
+					scope.agentControl.collapsed = !scope.agentControl.collapsed;
+				};
+
+				scope.toggleProviderMenu = function() {
+					scope.agentControl.configMenuOpen = false;
+					scope.agentControl.providerMenuOpen = !scope.agentControl.providerMenuOpen;
+				};
+
+				scope.toggleConfigMenu = function() {
+					scope.agentControl.providerMenuOpen = false;
+					scope.agentControl.configMenuOpen = !scope.agentControl.configMenuOpen;
+				};
+
+				scope.selectProviderFromMenu = function(provider) {
+					scope.agentControl.providerId = provider.id;
+					scope.agentControl.providerMenuOpen = false;
+					scope.providerChanged();
+				};
+
+				scope.selectModelFromMenu = function(model) {
+					scope.agentControl.modelId = model.id;
+					scope.agentControl.configMenuOpen = false;
+					scope.modelChanged();
+				};
+
+				scope.selectEffortFromMenu = function(effort) {
+					scope.agentControl.effort = effort.id;
+					scope.agentControl.configMenuOpen = false;
 				};
 
 				scope.selectedProviderNeedsInstall = function() {
@@ -158,6 +221,8 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 
 				scope.providerChanged = function() {
 					var provider = selectedProvider();
+					scope.agentControl.providerMenuOpen = false;
+					scope.agentControl.configMenuOpen = false;
 					modelLoadProviderId = null;
 					scope.agentControl.modelId = null;
 					scope.agentControl.effort = null;
@@ -171,6 +236,10 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 					}
 					if (provider.installState === 'auth_required') {
 						scope.agentControl.authCandidate = provider;
+						return;
+					}
+					if (provider.models && provider.models.length) {
+						setModels(provider.models);
 						return;
 					}
 					ensureSelectedProviderModels(provider);
@@ -387,18 +456,62 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 				};
 
 				scope.canSendAgentSession = function() {
-					return !scope.agentControl.busy && !scope.agentControl.document.dirty &&
+					return !!(!scope.agentControl.busy && !scope.agentControl.document.dirty &&
 						!scope.agentControl.document.conflict && scope.agentControl.providerId &&
-						scope.agentControl.modelId && !(scope.agentControl.session && scope.agentControl.session.activeTurnId);
+						scope.agentControl.modelId && !(scope.agentControl.session && scope.agentControl.session.activeTurnId));
 				};
 
 				scope.canAppendAgentSession = function() {
-					return !scope.agentControl.busy && !scope.agentControl.document.dirty &&
-						!scope.agentControl.document.conflict && scope.agentControl.session && scope.agentControl.modelId;
+					return !!(!scope.agentControl.busy && !scope.agentControl.document.dirty &&
+						!scope.agentControl.document.conflict && scope.agentControl.session && scope.agentControl.modelId);
 				};
 
 				scope.canInterruptAgentSession = function() {
-					return !scope.agentControl.busy && scope.agentControl.session && scope.agentControl.session.activeTurnId;
+					return !!(!scope.agentControl.busy && scope.agentControl.session && scope.agentControl.session.activeTurnId);
+				};
+
+				scope.getPrimaryActionState = function() {
+					if (scope.agentControl.session && scope.agentControl.session.activeTurnId) {
+						return 'interrupt';
+					}
+					if (scope.agentControl.session) {
+						return 'append';
+					}
+					return 'send';
+				};
+
+				scope.canPerformPrimaryAction = function() {
+					var state = scope.getPrimaryActionState();
+					if (state === 'interrupt') return scope.canInterruptAgentSession();
+					if (state === 'append') return scope.canAppendAgentSession();
+					return scope.canSendAgentSession();
+				};
+
+				scope.handlePrimaryAction = function() {
+					var state = scope.getPrimaryActionState();
+					if (state === 'interrupt') {
+						scope.interruptAgentSession();
+						return;
+					}
+					if (state === 'append') {
+						scope.appendAgentSession();
+						return;
+					}
+					scope.sendAgentSession();
+				};
+
+				scope.primaryActionLabel = function() {
+					var state = scope.getPrimaryActionState();
+					if (state === 'interrupt') return agentSessionI18n.t('interrupt');
+					if (state === 'append') return agentSessionI18n.t('append');
+					if (scope.agentControl.busy) return agentSessionI18n.t('sending');
+					return agentSessionI18n.t('send');
+				};
+
+				scope.handleComposerKeydown = function(event) {
+					if (!event || event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+					event.preventDefault();
+					if (scope.canPerformPrimaryAction()) scope.handlePrimaryAction();
 				};
 
 				scope.$on('agent-session-snapshot', function(_event, value) {

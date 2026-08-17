@@ -280,7 +280,19 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 	public async mutate(input: SessionMutationInput): Promise<SessionSnapshot> {
 		const client = (await this.ensureReady()).client;
 		if (input.operation === 'rename') {
-			await client.request('thread/name/set', { threadId: input.session.sessionId, name: input.value || null });
+			// Best-effort: 命名不是核心功能，失败不应阻塞任务执行
+			const state = this.sessions.get(input.session.sessionId);
+			if (!state || (!state.session.turnId && !state.activeTurnId)) {
+				// 防护：确保至少有一个 Turn 已启动，避免 "no rollout found" 错误
+				console.warn('Codex: skipping thread/name/set before first turn starts (best-effort)');
+			} else {
+				try {
+					await client.request('thread/name/set', { threadId: input.session.sessionId, name: input.value || null });
+				} catch (error) {
+					// Best-effort: 命名失败不应阻塞任务执行
+					console.error('Codex thread/name/set failed (best-effort):', (error as Error).message || error);
+				}
+			}
 		} else if (input.operation === 'archive') {
 			await client.request('thread/archive', { threadId: input.session.sessionId });
 		} else {

@@ -1,0 +1,375 @@
+[data-component="agent-control-bar"] {
+	display: block;
+	width: ~"min(76ch, calc(100% - var(--spacing) * 8))";
+	padding: 0;
+	background: transparent;
+	border: 0;
+	box-shadow: none;
+	z-index: 12;
+
+	[data-slot="control-bar-content"] {
+		display: block;
+		min-width: 0;
+	}
+
+	[data-slot="composer-shell"] {
+		position: relative;
+		box-sizing: border-box;
+		width: 100%;
+		padding: ~"calc(var(--spacing) * 3)";
+		background: var(--surface-raised-stronger-non-alpha);
+		border: thin solid var(--border-weak-base);
+		border-radius: ~"calc(var(--radius-lg) * 2)";
+		box-shadow: var(--shadow-md);
+		transition: border-color var(--duration-open) ease, box-shadow var(--duration-open) ease;
+	}
+
+	[data-slot="composer-shell"]:focus-within {
+		border-color: var(--border-selected);
+		box-shadow: var(--shadow-md), var(--shadow-xs-border-focus);
+	}
+
+	[data-slot~="instruction-field"] {
+		display: block;
+		width: 100%;
+	}
+
+	[data-slot~="instruction-input"] {
+		display: block;
+		box-sizing: border-box;
+		width: 100%;
+		min-height: ~"calc(var(--spacing) * 18)";
+		max-height: ~"calc(var(--spacing) * 48)";
+		padding: var(--spacing) ~"calc(var(--spacing) * 10)" var(--spacing) var(--spacing);
+		resize: vertical;
+		color: var(--text-strong);
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+		box-shadow: none;
+		font: inherit;
+		line-height: 150%;
+	}
+
+	[data-slot~="instruction-input"]:focus-visible {
+		outline: none;
+		box-shadow: none;
+	}
+
+	[data-slot~="instruction-input"]::placeholder { color: var(--text-weak); }
+
+	[data-slot="composer-toolbar"],
+	[data-slot="toolbar-start"],
+	[data-slot="toolbar-end"] {
+		display: flex;
+		align-items: center;
+	}
+
+	[data-slot="composer-toolbar"] {
+		justify-content: space-between;
+		gap: ~"calc(var(--spacing) * 3)";
+		margin-top: ~"calc(var(--spacing) * 2)";
+	}
+
+	[data-slot="toolbar-start"],
+	[data-slot="toolbar-end"] { gap: var(--spacing); }
+	[data-slot="toolbar-end"] { min-width: 0; }
+
+	[data-slot~="button"] {
+		box-shadow: none;
+		transform: none;
+	}
+
+	[data-slot~="button"]:hover:not(:disabled),
+	[data-slot~="button"]:active:not(:disabled) { transform: none; }
+
+	[data-slot~="toggle-collapse-button"] {
+		position: absolute;
+		top: ~"calc(var(--spacing) * 2)";
+		right: ~"calc(var(--spacing) * 2)";
+		z-index: 2;
+		width: ~"calc(var(--spacing) * 7)";
+		height: ~"calc(var(--spacing) * 7)";
+		color: var(--text-weak);
+		background: transparent;
+		border-color: transparent;
+		border-radius: 50%;
+	}
+
+	[data-slot~="toggle-collapse-button"]:hover:not(:disabled) {
+		color: var(--text-strong);
+		background: var(--surface-base-hover);
+		border-color: transparent;
+	}
+
+	[data-slot~="activity-button"],
+	[data-slot~="provider-install-button"] {
+		height: ~"calc(var(--spacing) * 8)";
+		padding: 0 ~"calc(var(--spacing) * 2)";
+		background: transparent;
+		border-color: transparent;
+	}
+
+	[data-slot="mcp-connection"] {
+		height: ~"calc(var(--spacing) * 8)";
+		padding: 0 ~"calc(var(--spacing) * 2)";
+		background: var(--background-weak);
+		border-color: transparent;
+		border-radius: ~"calc(var(--radius-lg) * 2)";
+	}
+
+	[data-slot~="config-trigger"] {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing);
+		max-width: 34ch;
+		height: ~"calc(var(--spacing) * 8)";
+		padding: 0 ~"calc(var(--spacing) * 3)";
+		background: var(--background-weak);
+		border-color: transparent;
+		border-radius: ~"calc(var(--radius-lg) * 2)";
+	}
+
+	[data-slot="config-summary"] {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	[data-slot="bolt-icon"] { flex: none; color: var(--icon-base); }
+
+	[data-slot="menu-chevron"] {
+		flex: none;
+		box-sizing: border-box;
+		width: ~"calc(var(--spacing) * 1.5)";
+		height: ~"calc(var(--spacing) * 1.5)";
+		margin-left: var(--spacing);
+		border-right: thin solid currentColor;
+		border-bottom: thin solid currentColor;
+		transform: rotate(45deg) translateY(~"calc(var(--spacing) / -2)");
+	}
+
+	[data-slot~="primary-action-button"] {
+		display: flex;
+		flex: none;
+		align-items: center;
+		justify-content: center;
+		width: ~"calc(var(--spacing) * 9)";
+		height: ~"calc(var(--spacing) * 9)";
+		padding: 0;
+		color: var(--icon-invert-base);
+		background: var(--surface-interactive-base);
+		border-color: var(--surface-interactive-base);
+		border-radius: 50%;
+	}
+
+	[data-slot~="primary-action-button"]:hover:not(:disabled) {
+		background: var(--surface-interactive-hover);
+		border-color: var(--surface-interactive-hover);
+	}
+
+	[data-slot~="primary-action-button"][data-action-state="interrupt"] {
+		color: var(--text-critical-base);
+		background: var(--surface-critical-weak);
+		border-color: var(--border-critical-selected);
+	}
+
+	[data-slot="primary-action-icon"] {
+		position: relative;
+		display: block;
+		width: ~"calc(var(--spacing) * 3)";
+		height: ~"calc(var(--spacing) * 3)";
+	}
+
+	[data-action-state="send"] [data-slot="primary-action-icon"]::before,
+	[data-action-state="append"] [data-slot="primary-action-icon"]::before {
+		position: absolute;
+		top: 0;
+		left: 50%;
+		box-sizing: border-box;
+		width: ~"calc(var(--spacing) * 2)";
+		height: ~"calc(var(--spacing) * 2)";
+		content: "";
+		border-top: thin solid currentColor;
+		border-left: thin solid currentColor;
+		transform: translateX(-50%) rotate(45deg);
+	}
+
+	[data-action-state="send"] [data-slot="primary-action-icon"]::after,
+	[data-action-state="append"] [data-slot="primary-action-icon"]::after {
+		position: absolute;
+		top: 0;
+		left: 50%;
+		width: ~"calc(var(--spacing) / 2)";
+		height: 100%;
+		content: "";
+		background: currentColor;
+		transform: translateX(-50%);
+	}
+
+	[data-action-state="interrupt"] [data-slot="primary-action-icon"] {
+		width: ~"calc(var(--spacing) * 2.5)";
+		height: ~"calc(var(--spacing) * 2.5)";
+		background: currentColor;
+		border-radius: var(--radius-sm);
+	}
+
+	[data-slot="provider-dock"] {
+		display: flex;
+		min-width: 0;
+	}
+
+	[data-slot~="provider-trigger"] {
+		display: flex;
+		align-items: center;
+		gap: ~"calc(var(--spacing) * 2)";
+		height: ~"calc(var(--spacing) * 7)";
+		padding: 0 ~"calc(var(--spacing) * 2)";
+		color: var(--text-base);
+		background: transparent;
+		border-color: transparent;
+	}
+
+	[data-slot="provider-device-icon"] {
+		position: relative;
+		flex: none;
+		box-sizing: border-box;
+		width: ~"calc(var(--spacing) * 4)";
+		height: ~"calc(var(--spacing) * 3)";
+		border: thin solid currentColor;
+		border-radius: var(--radius-sm);
+	}
+
+	[data-slot="provider-device-icon"]::after {
+		position: absolute;
+		left: 50%;
+		bottom: ~"calc(var(--spacing) / -1.5)";
+		width: ~"calc(var(--spacing) * 2)";
+		height: ~"calc(var(--spacing) / 2)";
+		content: "";
+		background: currentColor;
+		transform: translateX(-50%);
+	}
+
+	[data-slot~="menu"] {
+		position: absolute;
+		bottom: ~"calc(100% + var(--spacing) * 2)";
+		z-index: 6;
+		box-sizing: border-box;
+		width: ~"min(38ch, calc(100vw - var(--spacing) * 8))";
+		max-height: ~"calc(var(--spacing) * 112)";
+		overflow: auto;
+		padding: ~"calc(var(--spacing) * 2)";
+		color: var(--text-base);
+		background: var(--surface-raised-stronger-non-alpha);
+		border: thin solid var(--border-weak-base);
+		border-radius: ~"calc(var(--radius-lg) * 2)";
+		box-shadow: var(--shadow-md);
+		animation: agent-session-pop-in var(--duration-open) ease-out;
+	}
+
+	[data-slot~="provider-menu"] { left: 0; }
+	[data-slot~="config-menu"] { right: 0; }
+
+	[data-slot="menu-title"] {
+		padding: ~"calc(var(--spacing) * 2)" ~"calc(var(--spacing) * 3)";
+		color: var(--text-weak);
+		font-size: var(--font-size-small);
+		font-weight: 500;
+	}
+
+	[data-slot~="menu-item"] {
+		display: flex;
+		align-items: center;
+		gap: ~"calc(var(--spacing) * 2)";
+		width: 100%;
+		min-height: ~"calc(var(--spacing) * 9)";
+		padding: ~"calc(var(--spacing) * 2)" ~"calc(var(--spacing) * 3)";
+		background: transparent;
+		border-color: transparent;
+		box-shadow: none;
+		text-align: start;
+	}
+
+	[data-slot~="menu-item"]:hover:not(:disabled),
+	[data-slot~="menu-item"][aria-checked="true"] { background: var(--surface-base-hover); }
+	[data-slot="menu-item-label"] { flex: 1 1 auto; min-width: 0; }
+	[data-slot="selected-check"] { flex: none; color: var(--border-selected); }
+
+	[data-slot="provider-status-dot"] {
+		flex: none;
+		width: ~"calc(var(--spacing) * 2)";
+		height: ~"calc(var(--spacing) * 2)";
+		background: var(--icon-warning-base);
+		border-radius: 50%;
+	}
+
+	[data-slot="provider-status-dot"][data-state="ready"] { background: var(--icon-success-base); }
+	[data-slot="provider-status-dot"][data-state="failed"],
+	[data-slot="provider-status-dot"][data-state="incompatible"] { background: var(--icon-critical-base); }
+
+	[data-slot="menu-divider"] {
+		height: thin;
+		margin: var(--spacing) ~"calc(var(--spacing) * 2)";
+		background: var(--border-weak-base);
+	}
+
+	[data-slot="status"] { bottom: ~"calc(100% + var(--spacing) * 2)"; }
+	[data-slot="visually-hidden"] {
+		position: absolute;
+		width: 0;
+		height: 0;
+		overflow: hidden;
+	}
+
+	&.is-collapsed {
+		display: flex;
+		align-items: center;
+		width: auto;
+		min-width: 24ch;
+		padding: ~"calc(var(--spacing) * 2)";
+		background: var(--surface-raised-stronger-non-alpha);
+		border: thin solid var(--border-weak-base);
+		border-radius: ~"calc(var(--radius-lg) * 2)";
+		box-shadow: var(--shadow-md);
+	}
+
+	&.is-collapsed [data-slot~="toggle-collapse-button"] {
+		position: static;
+		order: 2;
+		margin-left: ~"calc(var(--spacing) * 2)";
+	}
+
+	&.is-collapsed [data-slot="collapsed-status"] { flex: 1 1 auto; }
+}
+
+@container (max-width: 100ch) {
+	[data-component="agent-control-bar"] {
+		width: ~"calc(100% - var(--spacing) * 6)";
+		bottom: ~"calc(var(--spacing) * 3)";
+	}
+
+	[data-component="agent-control-bar"].is-collapsed { width: auto; }
+	[data-component="agent-control-bar"] [data-slot~="config-trigger"] { max-width: 30ch; }
+	[data-component="agent-control-bar"] [data-slot="mcp-status-label"] { display: none; }
+	[data-component="agent-control-bar"] [data-slot="mcp-connection"] { padding: 0 ~"calc(var(--spacing) * 2)"; }
+	[data-component="agent-session-history"],
+	[data-component="agent-activity-overview"],
+	.node-card { bottom: ~"calc(var(--spacing) * 48)"; }
+}
+
+@container (max-width: 54ch) {
+	[data-component="agent-control-bar"] [data-slot="composer-shell"] {
+		padding: ~"calc(var(--spacing) * 2)";
+	}
+
+	[data-component="agent-control-bar"] [data-slot~="instruction-input"] {
+		min-height: ~"calc(var(--spacing) * 15)";
+		padding-right: ~"calc(var(--spacing) * 8)";
+	}
+
+	[data-component="agent-control-bar"] [data-slot="composer-toolbar"] { gap: var(--spacing); }
+	[data-component="agent-control-bar"] [data-slot~="activity-button"] { display: none; }
+	[data-component="agent-control-bar"] [data-slot~="config-trigger"] { max-width: 24ch; }
+	[data-component="agent-control-bar"] [data-slot~="menu"] { width: ~"calc(100vw - var(--spacing) * 8)"; }
+}

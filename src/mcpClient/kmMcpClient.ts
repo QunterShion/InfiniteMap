@@ -153,6 +153,11 @@ export class KmMcpClient {
 		);
 		this.process = child;
 		child.stdout.on('data', (chunk: Buffer) => this.handleStdout(child, chunk));
+		// 必须消费 stderr，否则缓冲区满后进程会被阻塞
+		child.stderr.on('data', (chunk: Buffer) => {
+			// 可选：记录 stderr 到控制台以便调试
+			// console.error('[KM MCP stderr]', chunk.toString('utf8'));
+		});
 		child.on('error', (error) => this.handleDisconnect(child, error));
 		child.on('exit', (code, signal) => this.handleDisconnect(
 			child,

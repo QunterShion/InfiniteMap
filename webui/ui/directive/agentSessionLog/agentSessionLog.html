@@ -1,0 +1,48 @@
+<div class="agent-session-log" ng-show="sessionLog.visible">
+	<div class="agent-session-log-header" ng-click="toggleLogPanel()">
+		<span class="agent-session-log-title">
+			<span class="icon">📋</span>
+			<span>会话日志</span>
+			<span class="badge" ng-if="sessionLog.entries.length > 0">{{ sessionLog.entries.length }}</span>
+		</span>
+		<span class="agent-session-log-actions">
+			<button
+				class="btn-icon"
+				ng-click="toggleAutoScroll(); $event.stopPropagation()"
+				ng-class="{ 'active': sessionLog.autoScroll }"
+				title="自动滚动">
+				<span ng-if="sessionLog.autoScroll">📌</span>
+				<span ng-if="!sessionLog.autoScroll">📍</span>
+			</button>
+			<button
+				class="btn-icon"
+				ng-click="clearLog(); $event.stopPropagation()"
+				title="清空日志">
+				🗑️
+			</button>
+			<button class="btn-icon toggle" ng-class="{ 'collapsed': sessionLog.collapsed }">
+				<span ng-if="!sessionLog.collapsed">▼</span>
+				<span ng-if="sessionLog.collapsed">▲</span>
+			</button>
+		</span>
+	</div>
+
+	<div class="agent-session-log-content" ng-if="!sessionLog.collapsed">
+		<div
+			class="log-entry"
+			ng-repeat="entry in sessionLog.entries track by entry.id"
+			ng-class="'log-entry-' + entry.type">
+			<span class="log-icon">{{ getEntryIcon(entry) }}</span>
+			<span class="log-time">{{ formatTimestamp(entry.timestamp) }}</span>
+			<span class="log-content">
+				<span ng-if="!entry.metadata.streaming">{{ entry.content }}</span>
+				<span ng-if="entry.metadata.streaming" class="streaming">
+					{{ entry.content }}<span class="cursor">▊</span>
+				</span>
+			</span>
+		</div>
+		<div class="log-empty" ng-if="sessionLog.entries.length === 0">
+			<span class="hint">暂无会话内容</span>
+		</div>
+	</div>
+</div>

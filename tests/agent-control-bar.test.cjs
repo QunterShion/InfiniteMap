@@ -13,9 +13,12 @@ test('agent controls live only in the bottom control bar', () => {
   );
   const card = fs.readFileSync(path.join(root, 'webui/ui/directive/nodeCard/nodeCard.html'), 'utf8');
   assert.match(control, /data-component="agent-control-bar"/);
-  for (const slot of ['composer-shell', 'provider-trigger', 'provider-menu', 'config-trigger', 'config-menu', 'instruction-input', 'primary-action-button', 'toggle-collapse-button', 'collapsed-status']) {
-    assert.match(control, new RegExp(slot));
-  }
+	for (const slot of ['composer-shell', 'provider-trigger', 'provider-menu', 'permission-trigger', 'permission-menu', 'config-trigger', 'config-menu', 'instruction-input', 'primary-action-button', 'collapsed-primary-action', 'agent-action-feedback', 'retry-agent-action', 'toggle-collapse-button', 'collapsed-status']) {
+		assert.match(control, new RegExp(slot));
+	}
+	assert.match(control, /collapsed-primary-action[\s\S]*?ng-click="handlePrimaryAction\(\)"/);
+	assert.match(control, /collapsed-primary-action[\s\S]*?data-action-state="\{\{ getPrimaryActionState\(\) \}\}"/);
+	assert.doesNotMatch(control, /activity-button|openAgentActivity/);
 	assert.doesNotMatch(control, /data-slot="button (?:send|append|interrupt)-button"/);
 	assert.doesNotMatch(control, /<select\b/i);
 	assert.match(control, /<textarea[\s\S]*?handleComposerKeydown/);
@@ -24,9 +27,11 @@ test('agent controls live only in the bottom control bar', () => {
 	for (const slot of ['install-progress', 'install-status', 'install-status-indicator', 'retry-install-button']) {
 		assert.match(control, new RegExp(slot));
 	}
-	for (const slot of ['mcp-connection', 'mcp-status-indicator', 'mcp-status-label', 'reconnect-mcp-button']) {
+	for (const slot of ['mcp-connection', 'mcp-status-indicator']) {
 		assert.match(control, new RegExp(slot));
 	}
+	assert.doesNotMatch(control, /mcp-status-label|reconnect-mcp-button/);
+	assert.match(control, /data-slot="button mcp-connection"[\s\S]*?aria-label="\{\{ mcpConnectionLabel\(\) \}\}"/);
 	assert.match(control, /aria-live="polite"/);
 	assert.match(control, /role="progressbar"/);
 	assert.doesNotMatch(control, /<progress\b/i);
@@ -117,7 +122,10 @@ test('a default-selected installed Provider loads models and enables send for a 
   const readyCodex = {
     ...installedCodex,
     installState: 'ready',
-    models: [{ id: 'gpt-5.6-codex', label: 'GPT-5.6 Codex', effortOptions: [] }]
+    models: [{ id: 'gpt-5.6-codex', label: 'GPT-5.6 Codex', effortOptions: [] }],
+    permissionModes: [{
+      id: 'codex:ask', label: 'Ask for approval', support: 'native', risk: 'standard', isDefault: true
+    }]
   };
   const resolved = (value) => ({ then: (success) => success(value) });
   const listCalls = [];
@@ -172,11 +180,16 @@ test('primary action and collapse controls follow the current session state', ()
       id: 'codex', displayName: 'Codex', installState: 'ready',
       models: [{ id: 'gpt-5.6-codex', label: 'GPT-5.6 Codex', defaultEffort: 'high', effortOptions: [
         { id: 'medium', label: '中' }, { id: 'high', label: '高' }
-      ] }]
+      ] }],
+      permissionModes: [
+        { id: 'codex:ask', label: 'Ask for approval', support: 'native', risk: 'standard', isDefault: true },
+        { id: 'codex:full-access', label: 'Full access', support: 'native', risk: 'elevated', requiresConfirmation: true }
+      ]
     },
     {
       id: 'claudecode', displayName: 'Claude Code', installState: 'ready',
-      models: [{ id: 'claude-opus-4-1', label: 'Claude Opus 4.1', effortOptions: [] }]
+      models: [{ id: 'claude-opus-4-1', label: 'Claude Opus 4.1', effortOptions: [] }],
+      permissionModes: [{ id: 'claude:default', label: 'Default', support: 'native', risk: 'standard', isDefault: true }]
     }
   ];
   scope.agentControl.providers = providers;
@@ -185,6 +198,16 @@ test('primary action and collapse controls follow the current session state', ()
 
   assert.equal(scope.selectedProviderLabel(), 'Codex');
   assert.equal(scope.configurationLabel(), 'GPT-5.6 Codex · 高');
+  assert.equal(scope.selectedPermissionModeLabel(), 'Ask for approval');
+  scope.togglePermissionMenu();
+  assert.equal(scope.agentControl.permissionMenuOpen, true);
+  scope.selectPermissionFromMenu(providers[0].permissionModes[1]);
+  assert.equal(scope.agentControl.permissionModeId, 'codex:ask');
+  assert.equal(scope.agentControl.permissionModeCandidate.id, 'codex:full-access');
+  scope.cancelPermissionMode();
+  scope.selectPermissionFromMenu(providers[0].permissionModes[1]);
+  scope.confirmPermissionMode();
+  assert.equal(scope.agentControl.permissionModeId, 'codex:full-access');
   scope.toggleProviderMenu();
   assert.equal(scope.agentControl.providerMenuOpen, true);
   scope.toggleConfigMenu();
@@ -204,6 +227,8 @@ test('primary action and collapse controls follow the current session state', ()
   scope.toggleCollapse();
   assert.equal(scope.agentControl.collapsed, true);
   assert.equal(scope.agentControl.providerMenuOpen, false);
+  assert.equal(scope.getPrimaryActionState(), 'send');
+  assert.equal(scope.canPerformPrimaryAction(), true);
   scope.toggleCollapse();
   assert.equal(scope.agentControl.collapsed, false);
 
@@ -229,6 +254,129 @@ test('primary action and collapse controls follow the current session state', ()
   assert.deepEqual(calls, ['send', 'append', 'interrupt']);
 });
 
+test('agent actions provide immediate feedback, suppress duplicates, and recover with the same idempotency key', () => {
+  let directiveFactory;
+  const moduleApi = {
+    directive(name, definition) {
+      if (name === 'agentControlBar') directiveFactory = definition.at(-1);
+      return moduleApi;
+    }
+  };
+  const timers = [];
+  const fakeSetTimeout = (callback, milliseconds) => {
+    const timer = { callback, milliseconds, cancelled: false };
+    timers.push(timer);
+    return timer;
+  };
+  const fakeClearTimeout = (timer) => { timer.cancelled = true; };
+  vm.runInNewContext(
+    fs.readFileSync(path.join(root, 'webui/ui/directive/agentControlBar/agentControlBar.directive.js'), 'utf8'),
+    {
+      angular: { module: () => moduleApi },
+      CustomEvent: function CustomEvent() {},
+      document: { dispatchEvent() {} },
+      window: { crypto: { randomUUID: (() => { let id = 0; return () => `request-${++id}`; })() } },
+      setTimeout: fakeSetTimeout,
+      clearTimeout: fakeClearTimeout
+    }
+  );
+  const resolved = (value) => ({ then: (success) => success(value) });
+  const deferredCall = (payload) => {
+    const call = { payload };
+    call.promise = {
+      then(success, failure) {
+        call.resolve = success;
+        call.reject = failure;
+      }
+    };
+    return call;
+  };
+  const sendCalls = [];
+  const appendCalls = [];
+  const interruptCalls = [];
+  const sessionService = {
+    getSnapshot: () => ({ providers: [], session: null, document: { dirty: false, conflict: false } }),
+    discoverProviders: () => resolved({ providers: [], session: null, document: { dirty: false, conflict: false } }),
+    normalizeSession: (value) => value,
+    send(payload) {
+      const call = deferredCall(payload);
+      sendCalls.push(call);
+      return call.promise;
+    },
+    append(payload) {
+      const call = deferredCall(payload);
+      appendCalls.push(call);
+      return call.promise;
+    },
+    interrupt(turnId) {
+      const call = deferredCall(turnId);
+      interruptCalls.push(call);
+      return call.promise;
+    }
+  };
+  const scope = { $on() {}, $evalAsync() {} };
+  directiveFactory(sessionService, { t: (key) => key }).link(scope);
+  Object.assign(scope.agentControl, {
+    busy: false,
+    providerId: 'codex',
+    modelId: 'gpt-5.6-codex',
+    permissionModeId: 'codex:ask',
+    input: 'Run the task'
+  });
+
+  scope.handlePrimaryAction();
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].payload.permissionModeId, 'codex:ask');
+  assert.equal(scope.agentControl.action.phase, 'sending');
+  assert.equal(scope.agentActionStatusLabel(), 'sending');
+  assert.equal(scope.primaryActionLabel(), 'sending');
+  assert.equal(scope.canPerformPrimaryAction(), false);
+  scope.handlePrimaryAction();
+  assert.equal(sendCalls.length, 1, 'a second click while pending must not submit again');
+
+  assert.equal(timers[0].milliseconds, 30000);
+  timers[0].callback();
+  assert.equal(scope.agentControl.action.phase, 'timed_out');
+  assert.equal(scope.agentControl.busy, false);
+  assert.equal(scope.agentControl.error, 'requestTimedOut');
+  assert.equal(scope.canRetryAgentAction(), true);
+  sendCalls[0].resolve({ session: { activeTurnId: 'late-turn' } });
+  assert.equal(scope.agentControl.session, null, 'a response arriving after timeout must not overwrite newer UI state');
+  assert.equal(scope.agentControl.input, 'Run the task');
+
+  scope.retryAgentAction();
+  assert.equal(sendCalls.length, 2);
+  assert.equal(sendCalls[1].payload.idempotencyKey, sendCalls[0].payload.idempotencyKey);
+  sendCalls[1].resolve({ session: { executionId: 'execution-1', activeTurnId: 'turn-1' } });
+  assert.equal(scope.agentControl.action.phase, 'idle');
+  assert.equal(scope.agentControl.input, '');
+  assert.equal(scope.getPrimaryActionState(), 'interrupt');
+  assert.equal(scope.agentActionFeedbackState(), 'running');
+  assert.equal(scope.agentActionStatusLabel(), 'active');
+
+  scope.handlePrimaryAction();
+  assert.equal(interruptCalls.length, 1);
+  assert.equal(interruptCalls[0].payload, 'turn-1');
+  assert.equal(scope.agentControl.action.phase, 'interrupting');
+  assert.equal(scope.primaryActionLabel(), 'interrupting');
+  scope.handlePrimaryAction();
+  assert.equal(interruptCalls.length, 1, 'interrupt is also single-flight');
+  interruptCalls[0].resolve({ session: { executionId: 'execution-1', activeTurnId: null } });
+
+  scope.agentControl.input = 'Follow up';
+  scope.handlePrimaryAction();
+  assert.equal(appendCalls.length, 1);
+  assert.equal(scope.agentControl.action.phase, 'sending');
+  assert.equal(scope.primaryActionLabel(), 'sending');
+  appendCalls[0].reject(new Error('Provider unavailable'));
+  assert.equal(scope.agentControl.action.phase, 'failed');
+  assert.equal(scope.agentControl.error, 'Provider unavailable');
+  assert.equal(scope.canRetryAgentAction(), true);
+  scope.retryAgentAction();
+  assert.equal(appendCalls.length, 2);
+  assert.equal(appendCalls[1].payload.idempotencyKey, appendCalls[0].payload.idempotencyKey);
+});
+
 test('agent-session UI uses semantic tokens and ships the 21-language union', () => {
   const styles = fs.readFileSync(path.join(root, 'webui/less/agentSession.less'), 'utf8');
   const composerStyles = fs.readFileSync(path.join(root, 'webui/less/agentComposer.less'), 'utf8');
@@ -238,12 +386,12 @@ test('agent-session UI uses semantic tokens and ships the 21-language union', ()
   assert.doesNotMatch(styles, /transition-all/);
   assert.doesNotMatch(composerStyles, /#[0-9a-f]{3,8}|rgba?\(|hsla?\(|\d+(?:\.\d+)?(?:px|rem)/i);
   assert.doesNotMatch(composerStyles, /transition-all/);
-	for (const slot of ['composer-shell', 'instruction-input', 'provider-trigger', 'config-trigger', 'menu-item', 'primary-action-button']) {
+	for (const slot of ['composer-shell', 'instruction-input', 'provider-trigger', 'permission-trigger', 'config-trigger', 'menu-item', 'primary-action-button']) {
 		assert.match(composerStyles, new RegExp(`data-slot(?:~)?=["']${slot}["']`));
 	}
 	assert.match(styles, /@container \(max-width: 100ch\)[\s\S]*?bottom: ~"calc\(var\(--spacing\) \* 80\)";[\s\S]*?\.node-card \{ bottom: ~"calc\(var\(--spacing\) \* 108\)"; \}/);
-	assert.match(styles, /\[data-component="agent-session-history"\][\s\S]*?bottom: ~"calc\(var\(--spacing\) \* 28\)";/);
-	assert.match(styles, /\[data-component="agent-activity-overview"\][\s\S]*?bottom: ~"calc\(var\(--spacing\) \* 28\)";/);
+	assert.match(styles, /\[data-component="agent-session-history"\][\s\S]*?bottom: auto;/);
+	assert.match(styles, /\[data-component="agent-activity-overview"\][\s\S]*?bottom: auto;/);
 	for (const slot of ['instruction-field', 'effort-field', 'model-field']) {
 		assert.match(styles, new RegExp(`data-slot~=["']${slot}["']`));
 	}

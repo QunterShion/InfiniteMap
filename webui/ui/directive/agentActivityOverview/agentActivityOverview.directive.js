@@ -13,7 +13,25 @@ angular.module('kityminderEditor').directive('agentActivityOverview', [
 					disconnected: true
 				};
 				var refreshTimer = null;
+				var storedSessions = [];
 				scope.activity = { visible: false, loading: false, items: [], total: 0, error: null };
+
+				function apply() {
+					if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
+				}
+
+				function announceDrawerState(open, restoreFocus) {
+					document.dispatchEvent(new CustomEvent('agent-session-drawer-state', {
+						detail: { drawer: 'activity', open: open, restoreFocus: restoreFocus === true }
+					}));
+				}
+
+				function focusDrawer() {
+					window.setTimeout(function() {
+						var drawer = document.getElementById('agent-activity-drawer');
+						if (drawer && drawer.focus) drawer.focus();
+					}, 0);
+				}
 
 				function nodeTitle(nodeId) {
 					var title = nodeId;
@@ -25,13 +43,16 @@ angular.module('kityminderEditor').directive('agentActivityOverview', [
 				}
 
 				function merge(sessions) {
-					var byNode = {};
-					(sessions || []).filter(function(session) {
+					var byExecution = {};
+					var liveSessions = agentSessionService.listLiveAgentSessions
+						? agentSessionService.listLiveAgentSessions()
+						: [];
+					(sessions || []).concat(liveSessions).filter(function(session) {
 						return ACTIVE_STATUSES[session.status] === true;
 					}).forEach(function(session) {
 						var item = {
 							nodeId: session.nodeId,
-							nodeTitle: nodeTitle(session.nodeId),
+							nodeTitle: nodeTitle(session.nodeId) || session.title || session.executionId,
 							executionId: session.executionId,
 							status: session.status,
 							provider: session.session && session.session.provider,
@@ -39,27 +60,10 @@ angular.module('kityminderEditor').directive('agentActivityOverview', [
 							updatedAt: session.updatedAt,
 							session: session
 						};
-						byNode[session.nodeId + ':' + session.executionId] = item;
+						byExecution[session.executionId] = item;
 					});
-				var now = Date.now();
-				Object.keys(window.kmExecState || {}).forEach(function(nodeId) {
-					var lease = window.kmExecState[nodeId];
-					if (!lease || lease.state !== 'claimed' || Date.parse(lease.leaseUntil) <= now) return;
-					var matchingKey = Object.keys(byNode).find(function(key) {
-						return byNode[key].nodeId === nodeId;
-					});
-					var item = matchingKey ? byNode[matchingKey] : {
-						nodeId: nodeId,
-						nodeTitle: nodeTitle(nodeId),
-						status: 'claimed'
-					};
-					item.workerId = lease.workerId;
-					item.leaseUntil = lease.leaseUntil;
-					item.taskKind = lease.taskKind || 'todo';
-					if (!matchingKey) byNode[nodeId + ':lease'] = item;
-				});
-				scope.activity.items = Object.keys(byNode).map(function(key) { return byNode[key]; }).sort(function(left, right) {
-					return Date.parse(right.updatedAt || right.leaseUntil || 0) - Date.parse(left.updatedAt || left.leaseUntil || 0);
+				scope.activity.items = Object.keys(byExecution).map(function(key) { return byExecution[key]; }).sort(function(left, right) {
+					return Date.parse(right.updatedAt || 0) - Date.parse(left.updatedAt || 0);
 				});
 				scope.activity.total = scope.activity.items.length;
 			}
@@ -73,7 +77,8 @@ angular.module('kityminderEditor').directive('agentActivityOverview', [
 						}
 						scope.activity.loading = false;
 						scope.activity.error = null;
-						merge(collected);
+						storedSessions = collected;
+						merge(storedSessions);
 					}, function(error) {
 						scope.activity.loading = false;
 						scope.activity.error = error && error.message || String(error);
@@ -86,7 +91,7 @@ angular.module('kityminderEditor').directive('agentActivityOverview', [
 					load(null, []);
 				}
 
-				function scheduleRefresh() {
+				function scheduleHistoryRefresh() {
 					if (!scope.activity.visible) return;
 					if (refreshTimer) window.clearTimeout(refreshTimer);
 					refreshTimer = window.setTimeout(function() {
@@ -95,28 +100,48 @@ angular.module('kityminderEditor').directive('agentActivityOverview', [
 					}, 60);
 				}
 
+				function refreshLiveSessions() {
+					if (!scope.activity.visible) return;
+					merge(storedSessions);
+				}
+
 				function open() {
+					document.dispatchEvent(new CustomEvent('agent-session-history-close'));
+					document.dispatchEvent(new CustomEvent('agent-session-detail-close'));
 					scope.activity.visible = true;
 					refresh();
-					if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
+					announceDrawerState(true);
+					apply();
+					focusDrawer();
+				}
+
+				function close(event) {
+					if (!scope.activity.visible) return;
+					scope.activity.visible = false;
+					announceDrawerState(false, event && event.detail && event.detail.restoreFocus);
+					apply();
 				}
 
 				document.addEventListener('agent-activity-open', open);
-				document.addEventListener('km-exec-state', scheduleRefresh);
-				scope.$on('agent-session-event', scheduleRefresh);
-				scope.$on('mcp-connection-state', function(_event, connection) {
-					if (connection.state === 'ready') scheduleRefresh();
+				document.addEventListener('agent-activity-close', close);
+				scope.$on('agent-session-live-detail', function() {
+					refreshLiveSessions();
 				});
-				scope.closeAgentActivity = function() { scope.activity.visible = false; };
-				scope.openActivityHistory = function(item) {
-					document.dispatchEvent(new CustomEvent('agent-session-history-open', {
-						detail: { nodeId: item.nodeId, executionId: item.executionId }
+				scope.$on('agent-session-event', function(_event, value) {
+					if (value.type === 'history.changed') scheduleHistoryRefresh();
+				});
+				scope.closeAgentActivity = function() {
+					close({ detail: { restoreFocus: true } });
+				};
+				scope.openActivitySession = function(item) {
+					document.dispatchEvent(new CustomEvent('agent-session-detail-open', {
+						detail: { session: item.session, source: 'activity' }
 					}));
 				};
 				scope.$on('$destroy', function() {
 					if (refreshTimer) window.clearTimeout(refreshTimer);
 					document.removeEventListener('agent-activity-open', open);
-					document.removeEventListener('km-exec-state', scheduleRefresh);
+					document.removeEventListener('agent-activity-close', close);
 				});
 			}
 		};

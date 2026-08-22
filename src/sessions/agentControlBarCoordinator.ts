@@ -118,8 +118,8 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 				executionId: string;
 				status: import('./types').NodeExecutionStatus;
 				session: import('./types').AgentSessionRef;
-				requestedConfig?: { modelId?: string; effort?: string };
-				effectiveConfig?: { modelId?: string; effort?: string };
+					requestedConfig?: import('./types').SessionConfiguration;
+					effectiveConfig?: import('./types').SessionConfiguration;
 				updatedAt: string;
 			}> };
 			const candidate = (page.sessions || []).find((record) =>
@@ -187,7 +187,15 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 						&& descriptor.installState !== 'auth_required'
 						? await this.orchestrator.listModels(providerId)
 						: descriptor.models;
-					response = this.success(request, { descriptor, models });
+					const workspace = vscode.workspace.getWorkspaceFolder(document.uri);
+					const permissionModes = descriptor.installState !== 'auth_required'
+						? await this.orchestrator.listPermissionModes(providerId, workspace?.uri.fsPath)
+						: descriptor.permissionModes;
+					response = this.success(request, {
+						descriptor: { ...descriptor, permissionModes },
+						models,
+						permissionModes,
+					});
 					break;
 				}
 				case 'send': {
@@ -206,6 +214,7 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 						message,
 						modelId,
 						effort: request.effort,
+						permissionModeId: request.permissionModeId,
 						idempotencyKey: request.idempotencyKey || request.requestId,
 					});
 					response = this.success(request, { session: snapshot });
@@ -227,6 +236,7 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 						message,
 						modelId,
 						effort: request.effort,
+						permissionModeId: request.permissionModeId,
 						idempotencyKey: request.idempotencyKey || request.requestId,
 						expectedTurnId: request.expectedTurnId,
 					});
@@ -493,7 +503,8 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 		return [
 			'MCP_UNAVAILABLE', 'DOCUMENT_DIRTY', 'PROVIDER_COMPONENT_MISSING', 'PROVIDER_INSTALL_FAILED',
 			'PROVIDER_LOAD_FAILED', 'PROVIDER_INCOMPATIBLE', 'AUTH_REQUIRED', 'CAPABILITY_UNAVAILABLE',
-			'MODEL_UNAVAILABLE', 'EFFORT_UNAVAILABLE', 'NO_ACTIVE_SESSION', 'NO_ACTIVE_TURN', 'STALE_TURN',
+				'MODEL_UNAVAILABLE', 'EFFORT_UNAVAILABLE', 'PERMISSION_MODE_UNAVAILABLE',
+				'NO_ACTIVE_SESSION', 'NO_ACTIVE_TURN', 'STALE_TURN',
 			'TIMEOUT', 'INTERNAL_ERROR',
 		].includes(code);
 	}

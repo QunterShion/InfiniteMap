@@ -1,0 +1,56 @@
+<aside id="agent-session-detail-drawer" data-component="agent-session-detail" ng-if="sessionDetail.visible"
+	role="region" tabindex="-1" aria-labelledby="agent-session-detail-title">
+	<header data-slot="session-detail-header">
+		<div>
+			<div id="agent-session-detail-title" data-slot="session-detail-title">{{ 'sessionDetail' | agentSessionText }}</div>
+			<div data-slot="session-detail-source">{{ sessionDetailSourceLabel() | agentSessionText }}</div>
+		</div>
+		<button data-slot="button close-button" type="button" ng-click="closeSessionDetail()"
+			aria-label="{{ 'backToSessions' | agentSessionText }}">{{ 'backToSessions' | agentSessionText }}</button>
+	</header>
+	<div data-slot="session-detail-body" role="region" tabindex="0"
+		aria-label="{{ 'realtimeEvents' | agentSessionText }}">
+		<div data-slot="session-detail-heading">
+			<div data-slot="session-detail-node">{{ sessionDetail.session.nodeTitle }}</div>
+			<span data-slot="session-detail-status" data-state="{{ sessionDetail.session.status }}">
+				{{ sessionDetail.session.status }}
+			</span>
+		</div>
+		<div data-slot="session-detail-provider">
+			{{ sessionDetail.session.session.provider }} ·
+			{{ sessionDetail.session.session.modelId || ('defaultModel' | agentSessionText) }}
+		</div>
+		<dl data-slot="session-detail-metadata">
+			<dt>{{ 'updatedAt' | agentSessionText }}</dt>
+			<dd>{{ sessionDetail.session.updatedAt | date:'yyyy-MM-dd HH:mm:ss' }}</dd>
+			<dt>{{ 'executionId' | agentSessionText }}</dt>
+			<dd>{{ sessionDetail.session.executionId }}</dd>
+			<dt ng-if="sessionDetail.session.session.effort">{{ 'effort' | agentSessionText }}</dt>
+			<dd ng-if="sessionDetail.session.session.effort">{{ sessionDetail.session.session.effort }}</dd>
+		</dl>
+		<div data-slot="session-detail-summary" ng-if="sessionDetail.session.summary">
+			{{ sessionDetail.session.summary }}
+		</div>
+		<div data-slot="session-detail-error" ng-if="sessionDetail.session.error">
+			{{ sessionDetail.session.error.code }} · {{ sessionDetail.session.error.message }}
+		</div>
+		<section data-slot="session-detail-events" aria-label="{{ 'realtimeEvents' | agentSessionText }}">
+			<div data-slot="session-detail-events-header">
+				<span>{{ 'realtimeEvents' | agentSessionText }}</span>
+				<span data-slot="live-indicator" ng-if="sessionDetail.live">{{ 'liveUpdating' | agentSessionText }}</span>
+			</div>
+			<div data-slot="session-detail-empty" ng-if="!sessionDetail.events.length">
+				{{ 'noRealtimeEvents' | agentSessionText }}
+			</div>
+			<ol data-slot="session-event-list" ng-if="sessionDetail.events.length">
+				<li data-slot="session-event" ng-repeat="event in sessionDetail.events track by event.id">
+					<div data-slot="session-event-meta">
+						<span>{{ event.type }}</span>
+						<time>{{ event.updatedAt | date:'HH:mm:ss' }}</time>
+					</div>
+					<div data-slot="session-event-text">{{ event.text }}</div>
+				</li>
+			</ol>
+		</section>
+	</div>
+</aside>

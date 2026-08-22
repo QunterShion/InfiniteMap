@@ -48,6 +48,33 @@ export interface ProviderModelOption {
 	defaultEffort?: string;
 }
 
+export type PermissionModeSource = 'builtin' | 'custom-profile' | 'provider';
+export type PermissionModeRisk = 'restricted' | 'standard' | 'elevated';
+
+/**
+ * Provider-owned permission/profile option. The id is intentionally opaque:
+ * approval behavior and execution boundaries are separate dimensions and are
+ * not interchangeable across Providers.
+ */
+export interface ProviderPermissionModeOption {
+	id: string;
+	label: string;
+	description?: string;
+	source: PermissionModeSource;
+	support: CapabilityLevel;
+	risk: PermissionModeRisk;
+	requiresConfirmation?: boolean;
+	isDefault?: boolean;
+	semantics: {
+		approvals: 'interactive' | 'provider-reviewed' | 'non-interactive' | 'profile-defined';
+		workspaceAccess: 'read-only' | 'workspace-write' | 'full-access' | 'profile-defined' | 'provider-defined';
+	};
+}
+
+export interface PermissionModeQueryInput {
+	workingDirectory?: string;
+}
+
 export interface SessionCapabilities {
 	availability: 'missing' | 'starting' | 'auth_required' | 'ready' | 'incompatible' | 'degraded';
 	lifecycle: {
@@ -63,6 +90,10 @@ export interface SessionCapabilities {
 		setModel: CapabilityLevel;
 		archive: CapabilityLevel;
 	};
+	toolPermissionModes: {
+		select: CapabilityLevel;
+		switching: 'next-turn' | 'active-turn' | 'new-session-only' | 'unsupported';
+	};
 	canStream: boolean;
 	kmTaskExecution: boolean;
 	receiptMode: 'native-json-schema' | 'schema-tool' | 'prompt-only';
@@ -76,6 +107,7 @@ export interface ProviderDescriptor {
 	componentExtensionId: string;
 	installState: ProviderInstallState;
 	models: ProviderModelOption[];
+	permissionModes: ProviderPermissionModeOption[];
 	capabilities: SessionCapabilities;
 }
 
@@ -87,7 +119,14 @@ export interface AgentSessionRef {
 	surface: 'app-server' | 'copilot-sdk' | 'claude-agent-sdk' | 'language-model' | 'provider-pack';
 	modelId?: string;
 	effort?: string;
+	permissionModeId?: string;
 	openUri: string;
+}
+
+export interface SessionConfiguration {
+	modelId?: string;
+	effort?: string;
+	permissionModeId?: string;
 }
 
 export interface SessionSnapshot {
@@ -98,8 +137,8 @@ export interface SessionSnapshot {
 	updatedAt: string;
 	title?: string;
 	activeTurnId?: string;
-	requestedConfig?: { modelId?: string; effort?: string };
-	effectiveConfig?: { modelId?: string; effort?: string };
+	requestedConfig?: SessionConfiguration;
+	effectiveConfig?: SessionConfiguration;
 	degradations?: Array<{
 		field: string;
 		action: 'dropped' | 'substituted' | 'blocked';
@@ -112,6 +151,7 @@ export interface CreateSessionInput {
 	workingDirectory: string;
 	modelId: string;
 	effort?: string;
+	permissionModeId?: string;
 	traceOpenUri?: string;
 	mcpServer: { command: string; args: string[] };
 }
@@ -122,6 +162,7 @@ export interface SendSessionInput {
 	message: string;
 	modelId: string;
 	effort?: string;
+	permissionModeId?: string;
 	idempotencyKey: string;
 }
 
@@ -181,6 +222,7 @@ export interface AgentSessionAdapter {
 	getDescriptor(): Promise<ProviderDescriptor>;
 	detectCapabilities(): Promise<SessionCapabilities>;
 	listModels(): Promise<ProviderModelOption[]>;
+	listPermissionModes(input?: PermissionModeQueryInput): Promise<ProviderPermissionModeOption[]>;
 	createSession(input: CreateSessionInput): Promise<AgentSessionRef>;
 	send(input: SendSessionInput): Promise<{ turnId?: string; submissionId: string }>;
 	append(input: AppendSessionInput): Promise<{ turnId?: string; submissionId: string }>;
@@ -211,6 +253,7 @@ export const AGENT_SESSION_ERROR_CODES = [
 	'CAPABILITY_UNAVAILABLE',
 	'MODEL_UNAVAILABLE',
 	'EFFORT_UNAVAILABLE',
+	'PERMISSION_MODE_UNAVAILABLE',
 	'NO_ACTIVE_SESSION',
 	'NO_ACTIVE_TURN',
 	'STALE_TURN',

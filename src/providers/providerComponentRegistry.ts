@@ -65,6 +65,10 @@ function unavailableCapabilities(): SessionCapabilities {
 			setModel: 'unsupported',
 			archive: 'unsupported',
 		},
+		toolPermissionModes: {
+			select: 'unsupported',
+			switching: 'unsupported',
+		},
 		canStream: false,
 		kmTaskExecution: false,
 		receiptMode: 'prompt-only',
@@ -332,6 +336,7 @@ export class ProviderComponentRegistry implements vscode.Disposable {
 			componentExtensionId: COMPONENT_ID,
 			installState: 'missing',
 			models: [],
+			permissionModes: [],
 			capabilities: unavailableCapabilities(),
 		};
 	}

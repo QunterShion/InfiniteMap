@@ -1,0 +1,131 @@
+// Window-level session drawer tabs. Drawer content remains owned by the
+// activity/history directives so the dock never invents or duplicates data.
+[data-component="agent-session-dock"] {
+	position: absolute;
+	top: 50%;
+	right: 0;
+	z-index: 5;
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	transform: translateY(-50%);
+	font-family: var(--font-family-sans);
+	font-size: var(--font-size-base);
+
+	[data-slot~="drawer-tab"] {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: ~"calc(var(--spacing) * 2)";
+		box-sizing: border-box;
+		width: ~"calc(var(--spacing) * 10)";
+		min-height: 12ch;
+		height: auto;
+		padding: ~"calc(var(--spacing) * 2)" ~"calc(var(--spacing) * 3)";
+		color: var(--text-base);
+		background: var(--surface-raised-stronger-non-alpha);
+		border: thin solid var(--border-weak-base);
+		border-right: 0;
+		border-radius: var(--radius-md) 0 0 var(--radius-md);
+		box-shadow: var(--shadow-md);
+		font: inherit;
+		font-weight: 500;
+		cursor: pointer;
+		transition: color var(--duration-open) ease,
+			background-color var(--duration-open) ease,
+			border-color var(--duration-open) ease,
+			transform var(--duration-open) ease;
+	}
+
+	[data-slot~="drawer-tab"]:hover {
+		background: var(--surface-base-hover);
+		border-color: var(--border-selected);
+		transform: translateX(~"calc(var(--spacing) / -2)");
+	}
+
+	[data-slot~="drawer-tab"] + [data-slot~="drawer-tab"] {
+		margin-top: ~"calc(var(--spacing) * -0.25)";
+	}
+
+	[data-slot~="drawer-tab"]:focus-visible {
+		outline: none;
+		box-shadow: var(--shadow-xs-border-focus), var(--shadow-md);
+	}
+
+	[data-slot~="drawer-tab"].is-active {
+		color: var(--icon-invert-base);
+		background: var(--surface-interactive-base);
+		border-color: var(--surface-interactive-base);
+	}
+
+	[data-slot~="tab-icon"] {
+		position: relative;
+		flex: none;
+		box-sizing: border-box;
+		width: ~"calc(var(--spacing) * 3.5)";
+		height: ~"calc(var(--spacing) * 3.5)";
+		color: currentColor;
+	}
+
+	[data-slot="tab-label"] {
+		line-height: 1;
+		letter-spacing: ~"calc(var(--spacing) / 2)";
+		text-orientation: upright;
+		white-space: nowrap;
+		writing-mode: vertical-rl;
+	}
+
+	[data-slot~="activity-icon"]::before,
+	[data-slot~="activity-icon"]::after {
+		position: absolute;
+		left: 0;
+		bottom: 0;
+		width: ~"calc(var(--spacing) * 1.5)";
+		background: currentColor;
+		border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+		content: '';
+	}
+
+	[data-slot~="activity-icon"]::before { height: 55%; }
+	[data-slot~="activity-icon"]::after {
+		left: auto;
+		right: 0;
+		height: 100%;
+	}
+
+	[data-slot~="history-icon"] {
+		border: thin solid currentColor;
+		border-radius: 50%;
+	}
+
+	[data-slot~="history-icon"]::before,
+	[data-slot~="history-icon"]::after {
+		position: absolute;
+		left: 50%;
+		top: 50%;
+		transform-origin: left center;
+		content: '';
+	}
+
+	[data-slot~="history-icon"]::before {
+		width: 0;
+		height: 32%;
+		border-left: thin solid currentColor;
+		transform: translate(-50%, -100%);
+	}
+
+	[data-slot~="history-icon"]::after {
+		width: 32%;
+		height: 0;
+		border-top: thin solid currentColor;
+		transform: translateY(-50%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-component="agent-session-dock"] [data-slot~="drawer-tab"] { transition: none; }
+	[data-component="agent-session-history"],
+	[data-component="agent-activity-overview"],
+	[data-component="agent-session-detail"] { animation: none; }
+}

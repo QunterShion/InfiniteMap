@@ -1,0 +1,24 @@
+<nav data-component="agent-session-dock" data-slot="session-dock"
+	 role="tablist" aria-orientation="vertical"
+	 aria-label="{{ 'activityOverview' | agentSessionText }} · {{ 'history' | agentSessionText }}">
+	<button data-slot="drawer-tab activity-tab" data-drawer="activity" type="button" role="tab"
+		aria-controls="agent-activity-drawer"
+		aria-selected="{{ sessionDock.activeDrawer === 'activity' }}"
+		ng-attr-tabindex="{{ sessionDock.activeDrawer === 'history' ? -1 : 0 }}"
+		ng-class="{ 'is-active': sessionDock.activeDrawer === 'activity' }"
+		ng-click="toggleSessionDrawer('activity')"
+		ng-keydown="handleSessionDockKeydown($event, 'activity')">
+		<span data-slot="tab-icon activity-icon" aria-hidden="true"></span>
+		<span data-slot="tab-label">{{ 'activityOverview' | agentSessionText }}</span>
+	</button>
+	<button data-slot="drawer-tab history-tab" data-drawer="history" type="button" role="tab"
+		aria-controls="agent-session-history-drawer"
+		aria-selected="{{ sessionDock.activeDrawer === 'history' }}"
+		ng-attr-tabindex="{{ sessionDock.activeDrawer === 'history' ? 0 : -1 }}"
+		ng-class="{ 'is-active': sessionDock.activeDrawer === 'history' }"
+		ng-click="toggleSessionDrawer('history')"
+		ng-keydown="handleSessionDockKeydown($event, 'history')">
+		<span data-slot="tab-icon history-icon" aria-hidden="true"></span>
+		<span data-slot="tab-label">{{ 'history' | agentSessionText }}</span>
+	</button>
+</nav>

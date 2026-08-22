@@ -8,8 +8,10 @@ import {
 	CreateSessionInput,
 	InterruptTurnInput,
 	OpenSessionInput,
+	PermissionModeQueryInput,
 	ProviderDescriptor,
 	ProviderModelOption,
+	ProviderPermissionModeOption,
 	QuerySessionInput,
 	RespondToInputInput,
 	SendSessionInput,
@@ -40,6 +42,7 @@ interface SessionState {
 	activeTurnId?: string;
 	requestedModel?: string;
 	effectiveModel?: string;
+	workingDirectory?: string;
 	loaded: boolean;
 }
 
@@ -59,6 +62,11 @@ interface PendingServerRequest {
 	params: any;
 	resolve(value: unknown): void;
 	timer: NodeJS.Timeout;
+}
+
+interface CodexPermissionProfilePage {
+	data?: Array<{ id: string; description?: string | null; allowed: boolean }>;
+	nextCursor?: string | null;
 }
 
 export class CodexAgentSessionAdapter implements AgentSessionAdapter {
@@ -84,6 +92,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				componentExtensionId: EXTENSION_ID,
 				installState: probe.authenticated ? 'ready' : 'auth_required',
 				models: this.toModelOptions(probe.models),
+				permissionModes: await this.listPermissionModes(),
 				capabilities,
 			};
 		} catch {
@@ -93,6 +102,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				componentExtensionId: EXTENSION_ID,
 				installState: 'failed',
 				models: [],
+				permissionModes: [],
 				capabilities: this.capabilities('incompatible'),
 			};
 		}
@@ -107,9 +117,56 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		return this.toModelOptions((await this.ensureProbe()).models);
 	}
 
+	public async listPermissionModes(
+		input: PermissionModeQueryInput = {}
+	): Promise<ProviderPermissionModeOption[]> {
+		const client = (await this.ensureProbe()).client;
+		const profiles: Array<{ id: string; description?: string | null; allowed: boolean }> = [];
+		let discoverySucceeded = false;
+		let requirements: {
+			allowedApprovalPolicies?: unknown[] | null;
+			allowedApprovalsReviewers?: string[] | null;
+			defaultPermissions?: string | null;
+		} | null = null;
+		try {
+			let cursor: string | null = null;
+			do {
+				const page: CodexPermissionProfilePage = await client.request<CodexPermissionProfilePage>(
+					'permissionProfile/list',
+					{ cursor, cwd: input.workingDirectory || null }
+				);
+				if (!Array.isArray(page?.data)) {
+					throw new Error('Codex permissionProfile/list response is missing data.');
+				}
+				profiles.push(...(page?.data || []).filter((profile) => profile.allowed));
+				cursor = page?.nextCursor || null;
+			} while (cursor);
+			const response = await client.request<{ requirements?: typeof requirements }>('configRequirements/read');
+			requirements = response?.requirements || null;
+			discoverySucceeded = true;
+		} catch {
+			// Older app-server builds do not expose profile discovery. The single
+			// legacy workspace mode remains fail-closed and never grants full access.
+		}
+
+		const modes = this.codexPermissionModes(profiles, requirements);
+		if (modes.length > 0) {
+			return modes;
+		}
+		if (discoverySucceeded) {
+			return [];
+		}
+		return [this.codexPermissionOption('codex:ask', 'Ask for approval', {
+			approvals: 'interactive',
+			workspaceAccess: 'workspace-write',
+		}, 'builtin', 'standard', true)];
+	}
+
 	public async createSession(input: CreateSessionInput): Promise<AgentSessionRef> {
 		const probe = await this.ensureReady();
 		this.assertModel(probe.models, input.modelId, input.effort);
+		const permissionMode = await this.resolvePermissionMode(input.permissionModeId, input.workingDirectory);
+		const permissionConfig = this.codexPermissionConfig(permissionMode.id);
 		const response = await probe.client.request<{
 			thread: CodexThread;
 			model: string;
@@ -117,6 +174,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		}>('thread/start', {
 			model: input.modelId,
 			cwd: input.workingDirectory,
+			...permissionConfig,
 			developerInstructions: CODEX_CONTROL_INSTRUCTIONS,
 			config: {
 				mcp_servers: {
@@ -137,12 +195,14 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			surface: 'app-server',
 			modelId: response.model || input.modelId,
 			effort: response.reasoningEffort || input.effort,
+			permissionModeId: permissionMode.id,
 			openUri: input.traceOpenUri || `vscode://chanterxiao.infinite-map/session/open?v=1&executionId=${encodeURIComponent(input.executionId)}`,
 		};
 		await probe.client.request('thread/resume', {
 			threadId: response.thread.id,
-			model: input.modelId,
-			cwd: input.workingDirectory,
+				model: input.modelId,
+				cwd: input.workingDirectory,
+				...permissionConfig,
 			developerInstructions: [
 				CODEX_CONTROL_INSTRUCTIONS,
 				'Provider trace context (protocolVersion 1):',
@@ -164,7 +224,8 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			sequence: 0,
 			updatedAt: new Date().toISOString(),
 			requestedModel: input.modelId,
-			effectiveModel: response.model || input.modelId,
+				effectiveModel: response.model || input.modelId,
+				workingDirectory: input.workingDirectory,
 			loaded: true,
 		});
 		return session;
@@ -174,10 +235,13 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		const probe = await this.ensureReady();
 		this.assertModel(probe.models, input.modelId, input.effort);
 		const state = this.requireSession(input.session);
+		const permissionMode = await this.resolvePermissionMode(input.permissionModeId, state.workingDirectory);
+		const permissionConfig = this.codexPermissionConfig(permissionMode.id);
 		if (!state.loaded) {
 			await probe.client.request('thread/resume', {
 				threadId: input.session.sessionId,
 				model: input.modelId,
+				...permissionConfig,
 			});
 			state.loaded = true;
 		}
@@ -202,14 +266,16 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				clientUserMessageId: submissionId,
 				input: [{ type: 'text', text: input.message, text_elements: [] }],
 				model: input.modelId,
-				effort: input.effort || null,
+					effort: input.effort || null,
+					...permissionConfig,
 				cwd: undefined,
 				outputSchema: AGENT_EXECUTION_RECEIPT_SCHEMA,
 			});
 			if (!response?.turn?.id) {
 				throw new Error('Codex turn/start response is missing turn.id.');
 			}
-			this.acceptSubmission(submissionId, response.turn.id);
+				this.acceptSubmission(submissionId, response.turn.id);
+				state.session.permissionModeId = permissionMode.id;
 			state.activeTurnId = response.turn.id;
 			state.session.turnId = response.turn.id;
 			this.updateState(state, 'running');
@@ -229,6 +295,12 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		const state = this.requireSession(input.session);
 		if (!state.activeTurnId) {
 			return this.send(input);
+		}
+		if (input.permissionModeId && input.permissionModeId !== state.session.permissionModeId) {
+			throw this.withCode(
+				'PERMISSION_MODE_UNAVAILABLE',
+				'Codex permission profile changes apply to the next turn.'
+			);
 		}
 		if (!input.expectedTurnId || input.expectedTurnId !== state.activeTurnId) {
 			await this.reconcileThread(input.session.sessionId);
@@ -271,7 +343,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 	public async query(input: QuerySessionInput): Promise<SessionSnapshot> {
 		const state = this.sessions.get(input.session.sessionId);
 		if (!state) {
-			await this.restoreSession(input.session, input.executionId || 'unknown');
+			await this.restoreSession(input.session, input.executionId || 'unknown', input.workingDirectory);
 		}
 		await this.reconcileThread(input.session.sessionId);
 		return this.snapshot(this.requireSession(input.session));
@@ -532,14 +604,16 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				sessionId: threadId,
 				threadId,
 				surface: 'app-server',
-				openUri: '',
+					openUri: '',
+					permissionModeId: 'codex:ask',
 			};
-			state = {
+				state = {
 				executionId: 'unknown',
 				session,
 				status: 'disconnected',
 				sequence: 0,
-				updatedAt: new Date().toISOString(),
+					updatedAt: new Date().toISOString(),
+					workingDirectory: undefined,
 				loaded: false,
 			};
 			this.sessions.set(threadId, state);
@@ -552,13 +626,22 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		this.updateState(state, status);
 	}
 
-	private async restoreSession(session: AgentSessionRef, executionId: string): Promise<void> {
+	private async restoreSession(
+		session: AgentSessionRef,
+		executionId: string,
+		workingDirectory?: string
+	): Promise<void> {
 		this.sessions.set(session.sessionId, {
 			executionId,
-			session: { ...session, threadId: session.threadId || session.sessionId },
+			session: {
+				...session,
+				threadId: session.threadId || session.sessionId,
+				permissionModeId: session.permissionModeId || 'codex:ask',
+			},
 			status: 'disconnected',
 			sequence: 0,
 			updatedAt: new Date().toISOString(),
+			workingDirectory,
 			loaded: false,
 		});
 	}
@@ -616,7 +699,175 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			sequence: state.sequence,
 			updatedAt: state.updatedAt,
 			activeTurnId: state.activeTurnId,
+			effectiveConfig: {
+				modelId: state.session.modelId,
+				effort: state.session.effort,
+				permissionModeId: state.session.permissionModeId,
+			},
 		};
+	}
+
+	private codexPermissionModes(
+		profiles: Array<{ id: string; description?: string | null }>,
+		requirements: {
+			allowedApprovalPolicies?: unknown[] | null;
+			allowedApprovalsReviewers?: string[] | null;
+			defaultPermissions?: string | null;
+		} | null
+	): ProviderPermissionModeOption[] {
+		const modes: ProviderPermissionModeOption[] = [];
+		const allowsPolicy = (policy: string): boolean => !requirements?.allowedApprovalPolicies
+			|| requirements.allowedApprovalPolicies.includes(policy);
+		const allowsReviewer = (reviewer: string): boolean => !requirements?.allowedApprovalsReviewers
+			|| requirements.allowedApprovalsReviewers.includes(reviewer);
+		for (const profile of profiles) {
+			if (profile.id === ':workspace') {
+				if (allowsPolicy('on-request') && allowsReviewer('user')) {
+					modes.push(this.codexPermissionOption(
+						'codex:ask',
+						'Ask for approval',
+						{ approvals: 'interactive', workspaceAccess: 'workspace-write' },
+						'builtin',
+						'standard',
+						false,
+						profile.description || undefined
+					));
+				}
+				if (allowsPolicy('on-request') && allowsReviewer('auto_review')) {
+					modes.push(this.codexPermissionOption(
+						'codex:approve-for-me',
+						'Approve for me',
+						{ approvals: 'provider-reviewed', workspaceAccess: 'workspace-write' },
+						'builtin',
+						'standard',
+						false,
+						'Codex reviews eligible approval requests automatically.'
+					));
+				}
+			} else if (profile.id === ':read-only') {
+				if (allowsPolicy('on-request') && allowsReviewer('user')) {
+					modes.push(this.codexPermissionOption(
+						'codex:read-only',
+						'Read only',
+						{ approvals: 'interactive', workspaceAccess: 'read-only' },
+						'builtin',
+						'restricted',
+						false,
+						profile.description || undefined
+					));
+				}
+			} else if (profile.id === ':full-access') {
+				if (allowsPolicy('never') && allowsReviewer('user')) {
+					modes.push(this.codexPermissionOption(
+						'codex:full-access',
+						'Full access',
+						{ approvals: 'non-interactive', workspaceAccess: 'full-access' },
+						'builtin',
+						'elevated',
+						false,
+						profile.description || undefined,
+						true
+					));
+				}
+			} else if (allowsPolicy('on-request') && allowsReviewer('user')) {
+				modes.push(this.codexPermissionOption(
+					`codex:profile:${encodeURIComponent(profile.id)}`,
+					profile.id,
+					{ approvals: 'profile-defined', workspaceAccess: 'profile-defined' },
+					'custom-profile',
+					'standard',
+					false,
+					profile.description || undefined
+				));
+			}
+		}
+
+		const configuredDefault = requirements?.defaultPermissions;
+		const defaultId = configuredDefault === ':workspace'
+			? 'codex:ask'
+			: configuredDefault === ':read-only'
+				? 'codex:read-only'
+				: configuredDefault === ':full-access'
+					? 'codex:full-access'
+					: configuredDefault
+						? `codex:profile:${encodeURIComponent(configuredDefault)}`
+						: undefined;
+		const selectedDefault = modes.find((mode) => mode.id === defaultId)
+			|| modes.find((mode) => mode.id === 'codex:ask')
+			|| modes.find((mode) => mode.risk === 'restricted')
+			|| modes[0];
+		if (selectedDefault) {
+			selectedDefault.isDefault = true;
+		}
+		return modes;
+	}
+
+	private codexPermissionOption(
+		id: string,
+		label: string,
+		semantics: ProviderPermissionModeOption['semantics'],
+		source: ProviderPermissionModeOption['source'],
+		risk: ProviderPermissionModeOption['risk'],
+		isDefault = false,
+		description?: string,
+		requiresConfirmation = false
+	): ProviderPermissionModeOption {
+		return {
+			id,
+			label,
+			description,
+			source,
+			support: 'native',
+			risk,
+			requiresConfirmation,
+			isDefault,
+			semantics,
+		};
+	}
+
+	private async resolvePermissionMode(
+		permissionModeId: string | undefined,
+		workingDirectory?: string
+	): Promise<ProviderPermissionModeOption> {
+		const modes = await this.listPermissionModes({ workingDirectory });
+		const mode = permissionModeId
+			? modes.find((candidate) => candidate.id === permissionModeId)
+			: modes.find((candidate) => candidate.isDefault) || modes[0];
+		if (!mode) {
+			throw this.withCode(
+				'PERMISSION_MODE_UNAVAILABLE',
+				permissionModeId
+					? `Codex permission profile is unavailable or disallowed: ${permissionModeId}`
+					: 'Codex does not expose an allowed permission profile.'
+			);
+		}
+		return mode;
+	}
+
+	private codexPermissionConfig(permissionModeId: string): {
+		permissions: string;
+		approvalPolicy: 'on-request' | 'never';
+		approvalsReviewer: 'user' | 'auto_review';
+	} {
+		switch (permissionModeId) {
+			case 'codex:ask':
+				return { permissions: ':workspace', approvalPolicy: 'on-request', approvalsReviewer: 'user' };
+			case 'codex:approve-for-me':
+				return { permissions: ':workspace', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' };
+			case 'codex:read-only':
+				return { permissions: ':read-only', approvalPolicy: 'on-request', approvalsReviewer: 'user' };
+			case 'codex:full-access':
+				return { permissions: ':full-access', approvalPolicy: 'never', approvalsReviewer: 'user' };
+			default:
+				if (permissionModeId.startsWith('codex:profile:')) {
+					return {
+						permissions: decodeURIComponent(permissionModeId.slice('codex:profile:'.length)),
+						approvalPolicy: 'on-request',
+						approvalsReviewer: 'user',
+					};
+				}
+				throw this.withCode('PERMISSION_MODE_UNAVAILABLE', `Unknown Codex permission profile: ${permissionModeId}`);
+		}
 	}
 
 	private capabilities(availability: SessionCapabilities['availability']): SessionCapabilities {
@@ -635,6 +886,10 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				setModel: 'emulated',
 				archive: 'native',
 			},
+			toolPermissionModes: {
+				select: 'native',
+				switching: 'next-turn',
+			},
 			canStream: true,
 			kmTaskExecution: availability === 'ready',
 			receiptMode: 'native-json-schema',
@@ -649,10 +904,22 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			label: model.displayName || model.model || model.id,
 			effortOptions: (model.supportedReasoningEfforts || []).map((effort) => ({
 				id: effort.reasoningEffort,
-				label: effort.description || effort.reasoningEffort,
+				label: this.effortLabel(effort.reasoningEffort),
 			})),
 			defaultEffort: model.defaultReasoningEffort,
 		}));
+	}
+
+	private effortLabel(effort: string): string {
+		return ({
+			none: 'None',
+			minimal: 'Minimal',
+			low: 'Low',
+			medium: 'Medium',
+			high: 'High',
+			xhigh: 'X-high',
+			max: 'Max',
+		}[effort] || effort);
 	}
 
 	private assertModel(models: CodexModel[], modelId: string, effort?: string): void {
@@ -671,5 +938,11 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 
 	private isStaleTurn(error: unknown): boolean {
 		return error instanceof CodexRpcError && /expected.*turn|active.*turn|stale/i.test(error.message);
+	}
+
+	private withCode(code: string, message: string): Error {
+		const error = new Error(message) as Error & { code?: string };
+		error.code = code;
+		return error;
 	}
 }

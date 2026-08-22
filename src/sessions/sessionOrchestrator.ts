@@ -8,6 +8,8 @@ import {
 	NodeExecutionStatus,
 	ProviderDescriptor,
 	ProviderModelOption,
+	ProviderPermissionModeOption,
+	SessionConfiguration,
 	SessionMutationInput,
 	SessionSnapshot,
 } from './types';
@@ -22,8 +24,8 @@ interface ActiveDocumentSession {
 	providerId: string;
 	adapter: AgentSessionAdapter;
 	session: AgentSessionRef;
-	requestedConfig: { modelId: string; effort?: string };
-	effectiveConfig: { modelId?: string; effort?: string };
+	requestedConfig: SessionConfiguration & { modelId: string };
+	effectiveConfig: SessionConfiguration;
 	activeTurnId?: string;
 	status: SessionSnapshot['status'];
 	updatedAt: string;
@@ -39,6 +41,7 @@ export interface StartOrSendInput {
 	message: string;
 	modelId: string;
 	effort?: string;
+	permissionModeId?: string;
 	idempotencyKey: string;
 }
 
@@ -51,8 +54,8 @@ export interface RecoverSessionInput {
 	executionId: string;
 	status: SessionSnapshot['status'];
 	session: AgentSessionRef;
-	requestedConfig?: { modelId?: string; effort?: string };
-	effectiveConfig?: { modelId?: string; effort?: string };
+	requestedConfig?: SessionConfiguration;
+	effectiveConfig?: SessionConfiguration;
 	updatedAt: string;
 	workingDirectory: string;
 	mcpServer: { command: string; args: string[] };
@@ -78,6 +81,10 @@ export class SessionOrchestrator implements vscode.Disposable {
 		return (await this.getAdapter(providerId)).listModels();
 	}
 
+	public async listPermissionModes(providerId: string, workingDirectory?: string): Promise<ProviderPermissionModeOption[]> {
+		return (await this.getAdapter(providerId)).listPermissionModes({ workingDirectory });
+	}
+
 	public getSnapshot(documentKey: string): SessionSnapshot | undefined {
 		const active = this.sessions.get(documentKey);
 		return active ? this.toSnapshot(active) : undefined;
@@ -89,8 +96,15 @@ export class SessionOrchestrator implements vscode.Disposable {
 		}
 		try {
 			const adapter = await this.getAdapter(input.session.provider);
+			const permissionMode = await this.resolvePermissionMode(
+				adapter,
+				input.requestedConfig?.permissionModeId
+					|| input.effectiveConfig?.permissionModeId
+					|| input.session.permissionModeId,
+				input.workingDirectory
+			);
 			const providerSnapshot = await adapter.query({
-				session: input.session,
+				session: { ...input.session, permissionModeId: permissionMode.id },
 				executionId: input.executionId,
 				workingDirectory: input.workingDirectory,
 				mcpServer: input.mcpServer,
@@ -104,10 +118,18 @@ export class SessionOrchestrator implements vscode.Disposable {
 				requestedConfig: {
 					modelId: input.requestedConfig?.modelId || input.session.modelId || '',
 					effort: input.requestedConfig?.effort || input.session.effort,
+					permissionModeId: input.requestedConfig?.permissionModeId || permissionMode.id,
 				},
-				effectiveConfig: input.effectiveConfig || {
-					modelId: providerSnapshot.session.modelId || input.session.modelId,
-					effort: providerSnapshot.session.effort || input.session.effort,
+				effectiveConfig: {
+					modelId: input.effectiveConfig?.modelId
+						|| providerSnapshot.session.modelId
+						|| input.session.modelId,
+					effort: input.effectiveConfig?.effort
+						|| providerSnapshot.session.effort
+						|| input.session.effort,
+					permissionModeId: input.effectiveConfig?.permissionModeId
+						|| providerSnapshot.session.permissionModeId
+						|| permissionMode.id,
 				},
 				activeTurnId: providerSnapshot.activeTurnId,
 				status: providerSnapshot.status,
@@ -138,7 +160,6 @@ export class SessionOrchestrator implements vscode.Disposable {
 			return cached;
 		}
 		const adapter = await this.getAdapter(input.providerId);
-		const model = await this.validateSelection(adapter, input.modelId, input.effort);
 		let active = this.sessions.get(input.documentKey);
 		if (active && active.providerId !== input.providerId) {
 			if (active.status === 'running' || active.status === 'starting' || active.status === 'interrupting') {
@@ -146,6 +167,13 @@ export class SessionOrchestrator implements vscode.Disposable {
 			}
 			active = undefined;
 		}
+		const selection = await this.validateSelection(
+			adapter,
+			input.modelId,
+			input.effort,
+			input.permissionModeId || active?.effectiveConfig.permissionModeId || active?.session.permissionModeId,
+			input.workingDirectory
+		);
 		if (!active) {
 			const executionId = randomUUID();
 			const traceOpenUri = this.buildOpenUri(executionId, input.mapPath, input.nodeId);
@@ -154,6 +182,7 @@ export class SessionOrchestrator implements vscode.Disposable {
 				workingDirectory: input.workingDirectory,
 				modelId: input.modelId,
 				effort: input.effort,
+				permissionModeId: selection.permissionMode.id,
 				traceOpenUri,
 				mcpServer: input.mcpServer,
 			});
@@ -164,8 +193,16 @@ export class SessionOrchestrator implements vscode.Disposable {
 				providerId: input.providerId,
 				adapter,
 				session,
-				requestedConfig: { modelId: input.modelId, effort: input.effort },
-				effectiveConfig: { modelId: session.modelId || model.id, effort: session.effort || input.effort },
+				requestedConfig: {
+					modelId: input.modelId,
+					effort: input.effort,
+					permissionModeId: selection.permissionMode.id,
+				},
+				effectiveConfig: {
+					modelId: session.modelId || selection.model.id,
+					effort: session.effort || input.effort,
+					permissionModeId: session.permissionModeId || selection.permissionMode.id,
+				},
 				status: 'idle',
 				updatedAt: new Date().toISOString(),
 			};
@@ -174,7 +211,11 @@ export class SessionOrchestrator implements vscode.Disposable {
 		if (active.activeTurnId) {
 			throw this.withCode('CAPABILITY_UNAVAILABLE', 'A turn is active; use append instead.');
 		}
-		active.requestedConfig = { modelId: input.modelId, effort: input.effort };
+		active.requestedConfig = {
+			modelId: input.modelId,
+			effort: input.effort,
+			permissionModeId: selection.permissionMode.id,
+		};
 		active.status = 'starting';
 		active.updatedAt = new Date().toISOString();
 		const submission = await adapter.send({
@@ -183,10 +224,16 @@ export class SessionOrchestrator implements vscode.Disposable {
 			message: input.message,
 			modelId: input.modelId,
 			effort: input.effort,
+			permissionModeId: selection.permissionMode.id,
 			idempotencyKey: input.idempotencyKey,
 		});
 		active.activeTurnId = submission.turnId;
 		active.session.turnId = submission.turnId;
+		active.effectiveConfig = {
+			modelId: active.session.modelId || selection.model.id,
+			effort: active.session.effort || input.effort,
+			permissionModeId: active.session.permissionModeId || selection.permissionMode.id,
+		};
 		active.status = submission.turnId ? 'running' : 'starting';
 		active.updatedAt = new Date().toISOString();
 		const result = this.toSnapshot(active);
@@ -204,7 +251,20 @@ export class SessionOrchestrator implements vscode.Disposable {
 		if (active.providerId !== input.providerId) {
 			throw this.withCode('CAPABILITY_UNAVAILABLE', 'Append must use the active session Provider.');
 		}
-		await this.validateSelection(active.adapter, input.modelId, input.effort);
+		const selection = await this.validateSelection(
+			active.adapter,
+			input.modelId,
+			input.effort,
+			input.permissionModeId || active.effectiveConfig.permissionModeId || active.session.permissionModeId,
+			input.workingDirectory
+		);
+		if (active.activeTurnId
+			&& selection.permissionMode.id !== (active.effectiveConfig.permissionModeId || active.session.permissionModeId)) {
+			throw this.withCode(
+				'PERMISSION_MODE_UNAVAILABLE',
+				'Permission mode changes apply to the next turn and cannot change an active turn.'
+			);
+		}
 		if (active.activeTurnId && input.expectedTurnId !== active.activeTurnId) {
 			await this.reconcile(active);
 			throw this.withCode('STALE_TURN', 'The active turn changed before append.');
@@ -215,11 +275,22 @@ export class SessionOrchestrator implements vscode.Disposable {
 			message: input.message,
 			modelId: input.modelId,
 			effort: input.effort,
+			permissionModeId: selection.permissionMode.id,
 			idempotencyKey: input.idempotencyKey,
 			expectedTurnId: input.expectedTurnId,
 		});
 		active.activeTurnId = submission.turnId || active.activeTurnId;
 		active.session.turnId = active.activeTurnId;
+		active.requestedConfig = {
+			modelId: input.modelId,
+			effort: input.effort,
+			permissionModeId: selection.permissionMode.id,
+		};
+		active.effectiveConfig = {
+			modelId: active.session.modelId || selection.model.id,
+			effort: active.session.effort || input.effort,
+			permissionModeId: active.session.permissionModeId || selection.permissionMode.id,
+		};
 		active.status = active.activeTurnId ? 'running' : active.status;
 		active.updatedAt = new Date().toISOString();
 		const result = this.toSnapshot(active);
@@ -354,6 +425,9 @@ export class SessionOrchestrator implements vscode.Disposable {
 			if (payload.session?.modelId) {
 				active.effectiveConfig.modelId = payload.session.modelId;
 			}
+			if (payload.session?.permissionModeId) {
+				active.effectiveConfig.permissionModeId = payload.session.permissionModeId;
+			}
 		}
 		if (event.type === 'session.completed') {
 			active.activeTurnId = undefined;
@@ -376,8 +450,10 @@ export class SessionOrchestrator implements vscode.Disposable {
 	private async validateSelection(
 		adapter: AgentSessionAdapter,
 		modelId: string,
-		effort?: string
-	): Promise<ProviderModelOption> {
+		effort?: string,
+		permissionModeId?: string,
+		workingDirectory?: string
+	): Promise<{ model: ProviderModelOption; permissionMode: ProviderPermissionModeOption }> {
 		const capabilities = await adapter.detectCapabilities();
 		if (capabilities.availability === 'auth_required') {
 			throw this.withCode('AUTH_REQUIRED', 'Provider authentication is required.');
@@ -393,7 +469,27 @@ export class SessionOrchestrator implements vscode.Disposable {
 		if (effort && !model.effortOptions.some((option) => option.id === effort)) {
 			throw this.withCode('EFFORT_UNAVAILABLE', `Selected effort is unavailable: ${effort}`);
 		}
-		return model;
+		return { model, permissionMode: await this.resolvePermissionMode(adapter, permissionModeId, workingDirectory) };
+	}
+
+	private async resolvePermissionMode(
+		adapter: AgentSessionAdapter,
+		permissionModeId?: string,
+		workingDirectory?: string
+	): Promise<ProviderPermissionModeOption> {
+		const modes = await adapter.listPermissionModes({ workingDirectory });
+		const selected = permissionModeId
+			? modes.find((option) => option.id === permissionModeId)
+			: modes.find((option) => option.isDefault) || modes[0];
+		if (!selected) {
+			throw this.withCode(
+				'PERMISSION_MODE_UNAVAILABLE',
+				permissionModeId
+					? `Selected permission mode is unavailable: ${permissionModeId}`
+					: 'Provider does not expose an allowed permission mode.'
+			);
+		}
+		return selected;
 	}
 
 	private async reconcile(active: ActiveDocumentSession): Promise<void> {
@@ -409,6 +505,7 @@ export class SessionOrchestrator implements vscode.Disposable {
 		active.effectiveConfig = snapshot.effectiveConfig || {
 			modelId: snapshot.session.modelId,
 			effort: snapshot.session.effort,
+			permissionModeId: snapshot.session.permissionModeId,
 		};
 	}
 

@@ -9,8 +9,10 @@ import {
 	CreateSessionInput,
 	InterruptTurnInput,
 	OpenSessionInput,
+	PermissionModeQueryInput,
 	ProviderDescriptor,
 	ProviderModelOption,
+	ProviderPermissionModeOption,
 	QuerySessionInput,
 	RespondToInputInput,
 	SendSessionInput,
@@ -60,8 +62,9 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 				id: PROVIDER_ID,
 				displayName: 'Copilot',
 				componentExtensionId: EXTENSION_ID,
-				installState: probe.authenticated ? 'ready' : 'auth_required',
-				models: this.toModelOptions(probe.models),
+					installState: probe.authenticated ? 'ready' : 'auth_required',
+					models: this.toModelOptions(probe.models),
+					permissionModes: await this.listPermissionModes(),
 				capabilities: this.capabilities(probe.authenticated ? 'ready' : 'auth_required'),
 			};
 		} catch {
@@ -69,8 +72,9 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 				id: PROVIDER_ID,
 				displayName: 'Copilot',
 				componentExtensionId: EXTENSION_ID,
-				installState: 'failed',
-				models: [],
+					installState: 'failed',
+					models: [],
+					permissionModes: [],
 				capabilities: this.capabilities('incompatible'),
 			};
 		}
@@ -85,17 +89,53 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 		return this.toModelOptions((await this.runtime.ensureProbe()).models);
 	}
 
+	public async listPermissionModes(
+		_input: PermissionModeQueryInput = {}
+	): Promise<ProviderPermissionModeOption[]> {
+		return [
+			this.permissionOption(
+				'copilot:ask',
+				'Ask for approval',
+				'interactive',
+				'provider-defined',
+				'standard',
+				true
+			),
+			this.permissionOption(
+				'copilot:deny',
+				'Deny protected tools',
+				'non-interactive',
+				'provider-defined',
+				'restricted'
+			),
+			this.permissionOption(
+				'copilot:approve-all',
+				'Approve all',
+				'non-interactive',
+				'provider-defined',
+				'elevated',
+				false,
+				true
+			),
+		];
+	}
+
 	public async createSession(input: CreateSessionInput): Promise<AgentSessionRef> {
 		const probe = await this.ensureReady();
 		this.assertModel(probe.models, input.modelId, input.effort);
+		const permissionMode = await this.resolvePermissionMode(input.permissionModeId);
 		const requestedSessionId = randomUUID();
-		const sdkSession = await probe.client.createSession(this.sessionConfig(input, requestedSessionId));
+		const sdkSession = await probe.client.createSession(this.sessionConfig({
+			...input,
+			permissionModeId: permissionMode.id,
+		}, requestedSessionId));
 		const session: AgentSessionRef = {
 			provider: PROVIDER_ID,
 			sessionId: sdkSession.sessionId,
 			surface: 'copilot-sdk',
 			modelId: input.modelId,
 			effort: input.effort,
+			permissionModeId: permissionMode.id,
 			openUri: input.traceOpenUri || `vscode://${EXTENSION_ID}/session/open?v=1&executionId=${encodeURIComponent(input.executionId)}`,
 		};
 		const state: CopilotSessionState = {
@@ -124,6 +164,14 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 
 	public async append(input: AppendSessionInput): Promise<{ turnId?: string; submissionId: string }> {
 		const state = this.requireSession(input.session);
+		if (state.activeTurnId
+			&& input.permissionModeId
+			&& input.permissionModeId !== state.session.permissionModeId) {
+			throw this.withCode(
+				'PERMISSION_MODE_UNAVAILABLE',
+				'Copilot permission mode changes apply to the next turn.'
+			);
+		}
 		if (state.activeTurnId && input.expectedTurnId !== state.activeTurnId) {
 			throw this.withCode('STALE_TURN', 'The active Copilot turn changed before append.');
 		}
@@ -137,16 +185,20 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 				throw this.withCode('NO_ACTIVE_SESSION', 'Copilot session recovery needs its workspace context.');
 			}
 			const probe = await this.ensureReady();
-			const sdkSession = await probe.client.resumeSession(input.session.sessionId, this.sessionConfig({
+				const sdkSession = await probe.client.resumeSession(input.session.sessionId, this.sessionConfig({
 				executionId: input.executionId,
 				workingDirectory: input.workingDirectory,
 				mcpServer: input.mcpServer,
 				modelId: input.session.modelId || '',
-				effort: input.session.effort,
+					effort: input.session.effort,
+					permissionModeId: input.session.permissionModeId || 'copilot:ask',
 			}, input.session.sessionId));
 			state = {
 				executionId: input.executionId,
-				session: { ...input.session },
+					session: {
+						...input.session,
+						permissionModeId: input.session.permissionModeId || 'copilot:ask',
+					},
 				sdkSession,
 				workingDirectory: input.workingDirectory,
 				mcpServer: input.mcpServer,
@@ -239,11 +291,13 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 	): Promise<{ turnId?: string; submissionId: string }> {
 		const probe = await this.ensureReady();
 		this.assertModel(probe.models, input.modelId, input.effort);
+		const permissionMode = await this.resolvePermissionMode(input.permissionModeId);
 		if (state.session.modelId !== input.modelId || state.session.effort !== input.effort) {
 			await state.sdkSession.setModel(input.modelId, { reasoningEffort: input.effort as any });
 			state.session.modelId = input.modelId;
 			state.session.effort = input.effort;
 		}
+		state.session.permissionModeId = permissionMode.id;
 		const messageId = await state.sdkSession.send({ prompt: input.message, mode });
 		const submissionId = input.idempotencyKey || messageId || randomUUID();
 		state.activeTurnId = messageId || submissionId;
@@ -253,7 +307,10 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 	}
 
 	private sessionConfig(
-		input: Pick<CreateSessionInput, 'executionId' | 'workingDirectory' | 'mcpServer' | 'modelId' | 'effort'>,
+		input: Pick<
+			CreateSessionInput,
+			'executionId' | 'workingDirectory' | 'mcpServer' | 'modelId' | 'effort' | 'permissionModeId'
+		>,
 		sessionId: string
 	): SessionConfig {
 		return {
@@ -277,7 +334,7 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 					args: input.mcpServer.args,
 				},
 			},
-			onPermissionRequest: (request) => this.requestPermission(sessionId, request),
+				onPermissionRequest: (request, invocation) => this.requestPermission(sessionId, request, invocation),
 			onUserInputRequest: (request) => this.requestQuestion(sessionId, request.question),
 		};
 	}
@@ -312,8 +369,21 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 		}));
 	}
 
-	private requestPermission(sessionId: string, request: PermissionRequest): Promise<any> {
+	private requestPermission(
+		sessionId: string,
+		request: PermissionRequest,
+		invocation: { managedSettingsEnabled?: boolean }
+	): Promise<any> {
 		const state = this.sessions.get(sessionId);
+		const mode = state?.session.permissionModeId || 'copilot:ask';
+		if (mode === 'copilot:deny') {
+			return Promise.resolve({ kind: 'reject', feedback: 'Denied by the selected permission mode.' });
+		}
+		const managedApprovalRequired = request.managedApprovalRequired === true
+			|| invocation.managedSettingsEnabled === true;
+		if (mode === 'copilot:approve-all' && !managedApprovalRequired) {
+			return Promise.resolve({ kind: 'approve-once' });
+		}
 		const requestId = randomUUID();
 		// Copilot-P1-02：先注册 pending input，再 emit 事件——防止同步事件处理器在
 		// pendingInputs 尚未写入时就调用 respondToInput() 造成找不到记录的竞争条件
@@ -323,7 +393,14 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 				kind: 'approval',
 				requestId,
 				title: `Copilot permission · ${request.kind}`,
-				params: request,
+					params: request,
+					...(mode === 'copilot:approve-all' && managedApprovalRequired ? {
+						fallback: {
+							requestedModeId: mode,
+							effectiveModeId: 'copilot:ask',
+							reason: 'Managed policy requires an explicit approval.',
+						},
+					} : {}),
 			});
 		}
 		return promise;
@@ -408,6 +485,10 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 				setModel: 'native',
 				archive: 'unsupported',
 			},
+			toolPermissionModes: {
+				select: 'emulated',
+				switching: 'next-turn',
+			},
 			canStream: true,
 			kmTaskExecution: true,
 			receiptMode: 'schema-tool',
@@ -424,6 +505,41 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 		return state;
 	}
 
+	private permissionOption(
+		id: string,
+		label: string,
+		approvals: ProviderPermissionModeOption['semantics']['approvals'],
+		workspaceAccess: ProviderPermissionModeOption['semantics']['workspaceAccess'],
+		risk: ProviderPermissionModeOption['risk'],
+		isDefault = false,
+		requiresConfirmation = false
+	): ProviderPermissionModeOption {
+		return {
+			id,
+			label,
+			source: 'provider',
+			support: 'emulated',
+			risk,
+			isDefault,
+			requiresConfirmation,
+			semantics: { approvals, workspaceAccess },
+		};
+	}
+
+	private async resolvePermissionMode(permissionModeId?: string): Promise<ProviderPermissionModeOption> {
+		const modes = await this.listPermissionModes();
+		const mode = permissionModeId
+			? modes.find((candidate) => candidate.id === permissionModeId)
+			: modes.find((candidate) => candidate.isDefault);
+		if (!mode) {
+			throw this.withCode(
+				'PERMISSION_MODE_UNAVAILABLE',
+				`Copilot permission mode is unavailable: ${permissionModeId || '(default)'}`
+			);
+		}
+		return mode;
+	}
+
 	private snapshot(state: CopilotSessionState): SessionSnapshot {
 		return {
 			executionId: state.executionId,
@@ -435,6 +551,7 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 			effectiveConfig: {
 				modelId: state.session.modelId,
 				effort: state.session.effort,
+				permissionModeId: state.session.permissionModeId,
 			},
 		};
 	}

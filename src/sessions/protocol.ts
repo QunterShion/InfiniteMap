@@ -33,6 +33,7 @@ export interface AgentSessionRequest {
 	providerId?: ProviderId;
 	modelId?: string;
 	effort?: string;
+	permissionModeId?: string;
 	input?: string;
 	idempotencyKey?: string;
 	expectedTurnId?: string;

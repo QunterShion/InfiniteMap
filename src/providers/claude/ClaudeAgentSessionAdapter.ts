@@ -11,8 +11,10 @@ import {
 	CreateSessionInput,
 	InterruptTurnInput,
 	OpenSessionInput,
+	PermissionModeQueryInput,
 	ProviderDescriptor,
 	ProviderModelOption,
+	ProviderPermissionModeOption,
 	QuerySessionInput,
 	RespondToInputInput,
 	SendSessionInput,
@@ -76,6 +78,7 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 			componentExtensionId: EXTENSION_ID,
 			installState: authenticated ? 'ready' : 'auth_required',
 			models: this.models(),
+			permissionModes: await this.listPermissionModes(),
 			capabilities: this.capabilities(authenticated ? 'ready' : 'auth_required'),
 		};
 	}
@@ -88,11 +91,57 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 		return this.models();
 	}
 
+	public async listPermissionModes(
+		_input: PermissionModeQueryInput = {}
+	): Promise<ProviderPermissionModeOption[]> {
+		return [
+			this.permissionOption(
+				'claude:default',
+				'Ask for approval',
+				'interactive',
+				'provider-defined',
+				'standard',
+				true
+			),
+			this.permissionOption(
+				'claude:accept-edits',
+				'Accept edits',
+				'interactive',
+				'workspace-write',
+				'standard'
+			),
+			this.permissionOption(
+				'claude:auto',
+				'Automatic approval review',
+				'provider-reviewed',
+				'provider-defined',
+				'standard'
+			),
+			this.permissionOption(
+				'claude:dont-ask',
+				'Do not ask',
+				'non-interactive',
+				'provider-defined',
+				'restricted'
+			),
+			this.permissionOption(
+				'claude:bypass',
+				'Bypass permissions',
+				'non-interactive',
+				'provider-defined',
+				'elevated',
+				false,
+				true
+			),
+		];
+	}
+
 	public async createSession(input: CreateSessionInput): Promise<AgentSessionRef> {
 		if (!(await this.isAuthenticated())) {
 			throw this.withCode('AUTH_REQUIRED', 'Claude Agent requires an Anthropic API key.');
 		}
 		this.assertModel(input.modelId, input.effort);
+		const permissionMode = await this.resolvePermissionMode(input.permissionModeId);
 		const sessionId = randomUUID();
 		const session: AgentSessionRef = {
 			provider: PROVIDER_ID,
@@ -100,6 +149,7 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 			surface: 'claude-agent-sdk',
 			modelId: input.modelId,
 			effort: input.effort,
+			permissionModeId: permissionMode.id,
 			openUri: input.traceOpenUri || `vscode://${EXTENSION_ID}/session/open?v=1&executionId=${encodeURIComponent(input.executionId)}`,
 		};
 		this.sessions.set(sessionId, {
@@ -134,7 +184,10 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 			}
 			state = {
 				executionId: input.executionId,
-				session: { ...input.session },
+				session: {
+					...input.session,
+					permissionModeId: input.session.permissionModeId || 'claude:default',
+				},
 				workingDirectory: input.workingDirectory,
 				mcpServer: input.mcpServer,
 				status: 'idle',
@@ -229,6 +282,7 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 			throw this.withCode('AUTH_REQUIRED', 'Claude Agent requires an Anthropic API key.');
 		}
 		this.assertModel(input.modelId, input.effort);
+		const permissionMode = await this.resolvePermissionMode(input.permissionModeId);
 		this.validateExecutable();
 		const state = this.requireSession(input.session);
 		if (state.activeTurnId) {
@@ -242,6 +296,7 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 		state.session.turnId = turnId;
 		state.session.modelId = input.modelId;
 		state.session.effort = input.effort;
+		state.session.permissionModeId = permissionMode.id;
 		this.updateState(state, 'running');
 
 		const sdk = await this.loadSdk();
@@ -252,7 +307,9 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 				abortController,
 				cwd: state.workingDirectory,
 				model: input.modelId,
-				effort: input.effort as any,
+					effort: input.effort as any,
+					permissionMode: this.claudePermissionMode(permissionMode.id),
+					allowDangerouslySkipPermissions: permissionMode.id === 'claude:bypass',
 				pathToClaudeCodeExecutable: this.options.executable,
 				sessionId: resume ? undefined : state.session.sessionId,
 				resume: resume ? state.session.sessionId : undefined,
@@ -336,6 +393,12 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 		approveValue: unknown,
 		denyValue: unknown
 	): Promise<any> {
+		if (state.session.permissionModeId === 'claude:bypass') {
+			return Promise.resolve(approveValue);
+		}
+		if (state.session.permissionModeId === 'claude:dont-ask') {
+			return Promise.resolve(denyValue);
+		}
 		this.emit(state, 'session.input.required', {
 			kind: 'approval',
 			requestId,
@@ -446,6 +509,10 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 				setModel: 'emulated',
 				archive: 'unsupported',
 			},
+			toolPermissionModes: {
+				select: 'native',
+				switching: 'next-turn',
+			},
 			canStream: true,
 			kmTaskExecution: true,
 			receiptMode: 'native-json-schema',
@@ -482,6 +549,55 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 		return state;
 	}
 
+	private permissionOption(
+		id: string,
+		label: string,
+		approvals: ProviderPermissionModeOption['semantics']['approvals'],
+		workspaceAccess: ProviderPermissionModeOption['semantics']['workspaceAccess'],
+		risk: ProviderPermissionModeOption['risk'],
+		isDefault = false,
+		requiresConfirmation = false
+	): ProviderPermissionModeOption {
+		return {
+			id,
+			label,
+			source: 'provider',
+			support: 'native',
+			risk,
+			isDefault,
+			requiresConfirmation,
+			semantics: { approvals, workspaceAccess },
+		};
+	}
+
+	private async resolvePermissionMode(permissionModeId?: string): Promise<ProviderPermissionModeOption> {
+		const modes = await this.listPermissionModes();
+		const mode = permissionModeId
+			? modes.find((candidate) => candidate.id === permissionModeId)
+			: modes.find((candidate) => candidate.isDefault);
+		if (!mode) {
+			throw this.withCode(
+				'PERMISSION_MODE_UNAVAILABLE',
+				`Claude permission mode is unavailable: ${permissionModeId || '(default)'}`
+			);
+		}
+		return mode;
+	}
+
+	private claudePermissionMode(
+		permissionModeId: string
+	): 'default' | 'acceptEdits' | 'auto' | 'dontAsk' | 'bypassPermissions' {
+		switch (permissionModeId) {
+			case 'claude:default': return 'default';
+			case 'claude:accept-edits': return 'acceptEdits';
+			case 'claude:auto': return 'auto';
+			case 'claude:dont-ask': return 'dontAsk';
+			case 'claude:bypass': return 'bypassPermissions';
+			default:
+				throw this.withCode('PERMISSION_MODE_UNAVAILABLE', `Unknown Claude permission mode: ${permissionModeId}`);
+		}
+	}
+
 	private snapshot(state: ClaudeSessionState): SessionSnapshot {
 		return {
 			executionId: state.executionId,
@@ -493,6 +609,7 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 			effectiveConfig: {
 				modelId: state.session.modelId,
 				effort: state.session.effort,
+				permissionModeId: state.session.permissionModeId,
 			},
 		};
 	}

@@ -11,12 +11,26 @@
     </button>
     <div data-slot="collapsed-status" role="status" aria-live="polite" ng-if="agentControl.collapsed">
         <span data-slot="collapsed-status-indicator"
-              data-state="{{ agentControl.mcpConnection.state }}" aria-hidden="true"></span>
+              data-state="{{ isAgentActionPending() ? agentActionFeedbackState() : agentControl.mcpConnection.state }}"
+              aria-hidden="true"></span>
         <span>{{ selectedProviderLabel() }}</span>
         <span aria-hidden="true">·</span>
-        <span ng-if="agentControl.session && agentControl.session.activeTurnId">{{ 'active' | agentSessionText }}</span>
-        <span ng-if="!agentControl.session || !agentControl.session.activeTurnId">{{ 'idle' | agentSessionText }}</span>
+        <span ng-if="isAgentActionPending()">{{ agentActionStatusLabel() }}</span>
+        <span ng-if="!isAgentActionPending() && agentControl.session && agentControl.session.activeTurnId">{{ 'active' | agentSessionText }}</span>
+        <span ng-if="!isAgentActionPending() && (!agentControl.session || !agentControl.session.activeTurnId)">{{ 'idle' | agentSessionText }}</span>
     </div>
+    <button data-slot="button primary-action-button collapsed-primary-action" type="button"
+            ng-if="agentControl.collapsed"
+            ng-click="handlePrimaryAction()"
+            ng-disabled="!canPerformPrimaryAction()"
+            ng-class="{'button-loading': isAgentActionPending()}"
+            data-action-state="{{ getPrimaryActionState() }}"
+            aria-label="{{ primaryActionLabel() }}" title="{{ primaryActionLabel() }}">
+        <span data-slot="spinner" aria-hidden="true"
+              ng-if="isAgentActionPending()">⟳</span>
+        <span data-slot="primary-action-icon" aria-hidden="true"
+              ng-if="!isAgentActionPending()"></span>
+    </button>
     <div id="agent-control-bar-content" data-slot="control-bar-content" ng-if="!agentControl.collapsed">
         <div data-slot="composer-shell">
             <label data-slot="field instruction-field">
@@ -30,18 +44,14 @@
             </label>
             <div data-slot="composer-toolbar">
                 <div data-slot="toolbar-start">
-                    <button data-slot="button activity-button" type="button" ng-click="openAgentActivity()">
-                        {{ 'activity' | agentSessionText }}
-                    </button>
-                    <div data-slot="mcp-connection" data-state="{{ agentControl.mcpConnection.state }}"
-                         role="status" aria-live="polite" title="{{ mcpConnectionLabel() }}">
+                    <button data-slot="button mcp-connection" type="button"
+                         data-state="{{ agentControl.mcpConnection.state }}"
+                         ng-click="reconnectMcp()"
+                         ng-disabled="agentControl.mcpConnection.state === 'ready' || agentControl.mcpConnection.busy"
+                         aria-live="polite" aria-label="{{ mcpConnectionLabel() }}"
+                         title="{{ mcpConnectionLabel() }}">
                         <span data-slot="mcp-status-indicator" aria-hidden="true"></span>
-                        <span data-slot="mcp-status-label">{{ mcpConnectionLabel() }}</span>
-                        <button data-slot="button reconnect-mcp-button" type="button"
-                                ng-if="agentControl.mcpConnection.state !== 'ready'"
-                                ng-disabled="agentControl.mcpConnection.busy"
-                                ng-click="reconnectMcp()">{{ 'reconnectMcp' | agentSessionText }}</button>
-                    </div>
+                    </button>
                     <div data-slot="provider-dock">
                         <button data-slot="button provider-trigger" type="button"
                                 ng-click="toggleProviderMenu()"
@@ -49,10 +59,20 @@
                                 aria-haspopup="menu" aria-expanded="{{ agentControl.providerMenuOpen }}"
                                 aria-label="{{ 'switchProvider' | agentSessionText }}">
                             <span data-slot="provider-device-icon" aria-hidden="true"></span>
-                            <span>{{ selectedProviderLabel() }}</span>
+                            <span data-slot="provider-summary">{{ selectedProviderLabel() }}</span>
                             <span data-slot="menu-chevron" aria-hidden="true"></span>
                         </button>
                     </div>
+                    <button data-slot="button permission-trigger" type="button"
+                            ng-if="agentControl.permissionModes.length"
+                            ng-click="togglePermissionMenu()"
+                            ng-disabled="agentControl.busy"
+                            aria-haspopup="menu" aria-expanded="{{ agentControl.permissionMenuOpen }}"
+                            aria-label="{{ 'toolPermissions' | agentSessionText }}">
+                        <span data-slot="permission-shield-icon" aria-hidden="true"></span>
+                        <span data-slot="permission-summary">{{ selectedPermissionModeLabel() }}</span>
+                        <span data-slot="menu-chevron" aria-hidden="true"></span>
+                    </button>
                     <button data-slot="button provider-install-button" type="button"
                             ng-if="selectedProviderNeedsInstall()" ng-click="requestSelectedProviderInstall()">
                         {{ 'install' | agentSessionText }}
@@ -71,15 +91,22 @@
                     <button data-slot="button primary-action-button" type="button"
                             ng-click="handlePrimaryAction()"
                             ng-disabled="!canPerformPrimaryAction()"
-                            ng-class="{'button-loading': agentControl.busy && !agentControl.session.activeTurnId}"
+                            ng-class="{'button-loading': isAgentActionPending()}"
                             data-action-state="{{ getPrimaryActionState() }}"
                             aria-label="{{ primaryActionLabel() }}" title="{{ primaryActionLabel() }}">
                         <span data-slot="spinner" aria-hidden="true"
-                              ng-if="getPrimaryActionState() === 'send' && agentControl.busy && !agentControl.session.activeTurnId">⟳</span>
+                              ng-if="isAgentActionPending()">⟳</span>
                         <span data-slot="primary-action-icon" aria-hidden="true"
-                              ng-if="!(getPrimaryActionState() === 'send' && agentControl.busy && !agentControl.session.activeTurnId)"></span>
+                              ng-if="!isAgentActionPending()"></span>
                     </button>
                 </div>
+            </div>
+            <div data-slot="agent-action-feedback"
+                 data-state="{{ agentActionFeedbackState() }}"
+                 role="status" aria-live="polite" aria-atomic="true"
+                 ng-if="isAgentActionPending() || (agentControl.session && agentControl.session.activeTurnId)">
+                <span data-slot="agent-action-status-indicator" aria-hidden="true"></span>
+                <span>{{ agentActionStatusLabel() }}</span>
             </div>
         </div>
 
@@ -93,6 +120,25 @@
                 <span data-slot="provider-status-dot" data-state="{{ provider.installState }}" aria-hidden="true"></span>
                 <span data-slot="menu-item-label">{{ providerOptionLabel(provider) }}</span>
                 <span data-slot="selected-check" ng-if="provider.id === agentControl.providerId" aria-hidden="true">✓</span>
+            </button>
+        </div>
+
+        <div data-slot="menu permission-menu" role="menu"
+             aria-label="{{ 'toolPermissions' | agentSessionText }}"
+             ng-if="agentControl.permissionMenuOpen">
+            <div data-slot="menu-title">{{ 'toolPermissions' | agentSessionText }}</div>
+            <button data-slot="button menu-item permission-option" type="button"
+                    ng-repeat="mode in agentControl.permissionModes track by mode.id"
+                    ng-click="selectPermissionFromMenu(mode)"
+                    role="menuitemradio" aria-checked="{{ mode.id === agentControl.permissionModeId }}">
+                <span data-slot="permission-mode-copy">
+                    <span data-slot="menu-item-label">{{ mode.label }}</span>
+                    <span data-slot="permission-description" ng-if="mode.description">{{ mode.description }}</span>
+                </span>
+                <span data-slot="permission-risk" data-risk="{{ mode.risk }}" ng-if="mode.risk === 'elevated'">
+                    {{ 'elevatedRisk' | agentSessionText }}
+                </span>
+                <span data-slot="selected-check" ng-if="mode.id === agentControl.permissionModeId" aria-hidden="true">✓</span>
             </button>
         </div>
 
@@ -128,6 +174,9 @@
          ng-class="{'status-error': agentControl.error, 'status-warning': !agentControl.error}">
         <strong ng-if="agentControl.error">{{ 'error' | agentSessionText }}:</strong>
         {{ agentControl.error || ('dirty' | agentSessionText) }}
+        <button data-slot="button retry-agent-action" type="button"
+                ng-if="agentControl.error && canRetryAgentAction()"
+                ng-click="retryAgentAction()">{{ 'retry' | agentSessionText }}</button>
         <button data-slot="button dismiss-error" type="button"
                 ng-if="agentControl.error"
                 ng-click="agentControl.error = null"
@@ -171,6 +220,20 @@
 		<div data-slot="popover-actions">
 			<button data-slot="button sign-in-button" type="button" ng-click="confirmProviderAuth()">{{ 'signIn' | agentSessionText }}</button>
 			<button data-slot="button cancel-button" type="button" ng-click="cancelProviderAuth()">{{ 'cancel' | agentSessionText }}</button>
+		</div>
+	</div>
+	<div data-component="permission-confirm-popover" data-slot="popover" role="dialog" aria-modal="true"
+		aria-label="{{ 'permissionConfirmTitle' | agentSessionText }}"
+		ng-if="agentControl.permissionModeCandidate">
+		<div data-slot="popover-title">{{ 'permissionConfirmTitle' | agentSessionText }}</div>
+		<div data-slot="popover-description">
+			{{ 'permissionConfirmMessage' | agentSessionText }} · {{ agentControl.permissionModeCandidate.label }}
+		</div>
+		<div data-slot="popover-actions">
+			<button data-slot="button confirm-permission-button" type="button"
+				ng-click="confirmPermissionMode()">{{ 'confirm' | agentSessionText }}</button>
+			<button data-slot="button cancel-button" type="button"
+				ng-click="cancelPermissionMode()">{{ 'cancel' | agentSessionText }}</button>
 		</div>
 	</div>
 	<div data-component="agent-input-dialog" data-slot="popover" role="dialog" aria-modal="true"

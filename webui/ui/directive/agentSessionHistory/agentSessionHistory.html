@@ -1,8 +1,8 @@
-<aside data-component="agent-session-history" ng-if="history.visible"
-       aria-label="{{ 'history' | agentSessionText }}">
+<aside id="agent-session-history-drawer" data-component="agent-session-history" ng-if="history.visible && !sessionDetail.visible"
+       role="region" tabindex="-1" aria-labelledby="agent-session-history-drawer-title">
     <header data-slot="history-header">
         <div data-slot="history-heading">
-            <div data-slot="history-title">{{ 'history' | agentSessionText }}</div>
+            <div id="agent-session-history-drawer-title" data-slot="history-title">{{ 'history' | agentSessionText }}</div>
             <div data-slot="history-meta">{{ history.total }} {{ 'records' | agentSessionText }}</div>
         </div>
         <button data-slot="button close-button" type="button" ng-click="closeHistory()"
@@ -16,9 +16,13 @@
     </div>
     <ol data-slot="history-list" ng-if="history.sessions.length">
         <li data-slot="history-item" ng-repeat="session in history.sessions track by session.executionId">
-            <a href="" data-slot="history-link" ng-click="$event.preventDefault(); openSession(session)">
+			<div data-slot="history-node" ng-if="!history.nodeId && session.nodeId">
+				{{ session.nodeTitle || session.nodeId }}
+			</div>
+			<button data-slot="history-link" type="button" ng-click="openSession(session)"
+				ng-attr-data-execution-id="{{ session.executionId }}">
                 {{ session.session.provider }} · {{ session.session.modelId || ('defaultEffort' | agentSessionText) }}
-            </a>
+			</button>
             <div data-slot="history-config">
                 <span>{{ session.status }}</span>
                 <span ng-if="session.session.effort"> · {{ session.session.effort }}</span>

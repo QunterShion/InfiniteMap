@@ -339,17 +339,17 @@ interface AgentExecutionReceipt {
     kind: 'created' | 'modified' | 'report';
   }>;
   validations: Array<{
-    command?: string;
+    command: string | null;
     name: string;
     passed: boolean;
-    evidence?: string;
+    evidence: string | null;
   }>;
-  collaborationChildren?: string[];
-  blocker?: string;
+  collaborationChildren: string[];
+  blocker: string | null;
 }
 ```
 
-Codex `turn/start` 可使用 `outputSchema` 强制该结构。Copilot Provider 不支持结构化输出时，可要求最终响应包含带版本标识的 JSON 回执；解析失败只影响摘要展示，不得驱动或阻断已经由 KM MCP 正确完成的节点状态。
+Codex `turn/start` 可使用 `outputSchema` 强制该结构。该 Schema 遵循 Structured Outputs strict 约束：每层对象设置 `additionalProperties: false`，所有 `properties` 字段都列入 `required`；业务可选字段通过 nullable 表达而不省略。Copilot Provider 不支持结构化输出时，可要求最终响应包含带版本标识的 JSON 回执；解析失败只影响摘要展示，不得驱动或阻断已经由 KM MCP 正确完成的节点状态。
 
 ## 7. 节点和旁车数据设计
 

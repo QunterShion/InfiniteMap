@@ -24,6 +24,8 @@ import { CodexRuntimeManager, CodexRuntimeProbe } from './CodexRuntimeManager';
 import {
 	AGENT_EXECUTION_RECEIPT_SCHEMA,
 	CODEX_CONTROL_INSTRUCTIONS,
+	CODEX_METHODS,
+	CODEX_PROTOCOL_SURFACE,
 	CodexModel,
 	CodexThread,
 	CodexTurn,
@@ -50,7 +52,7 @@ interface SubmissionState {
 	submissionId: string;
 	threadId: string;
 	expectedTurnId?: string;
-	rpcMethod: 'turn/start' | 'turn/steer';
+	rpcMethod: typeof CODEX_METHODS.turnStart | typeof CODEX_METHODS.turnSteer;
 	acceptedTurnId?: string;
 	requestSentAt: string;
 	firstObservedEventAt?: string;
@@ -98,7 +100,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				componentExtensionId: EXTENSION_ID,
 				installState: probe.authenticated ? 'ready' : 'auth_required',
 				models: this.toModelOptions(probe.models),
-				permissionModes: await this.listPermissionModes(),
+				permissionModes: probe.authenticated ? await this.listPermissionModes() : [],
 				capabilities,
 			};
 		} catch {
@@ -138,7 +140,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			let cursor: string | null = null;
 			do {
 				const page: CodexPermissionProfilePage = await client.request<CodexPermissionProfilePage>(
-					'permissionProfile/list',
+					CODEX_METHODS.permissionProfileList,
 					{ cursor, cwd: input.workingDirectory || null }
 				);
 				if (!Array.isArray(page?.data)) {
@@ -147,12 +149,25 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				profiles.push(...(page?.data || []).filter((profile) => profile.allowed));
 				cursor = page?.nextCursor || null;
 			} while (cursor);
-			const response = await client.request<{ requirements?: typeof requirements }>('configRequirements/read');
-			requirements = response?.requirements || null;
 			discoverySucceeded = true;
-		} catch {
-			// Older app-server builds do not expose profile discovery. The single
+		} catch (error) {
+			if (!this.isMethodUnavailable(error)) {
+				throw error;
+			}
+			// Older app-server builds may not expose profile discovery. The single
 			// legacy workspace mode remains fail-closed and never grants full access.
+		}
+		if (discoverySucceeded) {
+			try {
+				const response = await client.request<{ requirements?: typeof requirements }>(
+					CODEX_METHODS.configRequirementsRead
+				);
+				requirements = response?.requirements || null;
+			} catch (error) {
+				if (!this.isMethodUnavailable(error)) {
+					throw error;
+				}
+			}
 		}
 
 		const modes = this.codexPermissionModes(profiles, requirements);
@@ -179,7 +194,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			thread: CodexThread;
 			model: string;
 			reasoningEffort?: string | null;
-		}>('thread/start', {
+		}>(CODEX_METHODS.threadStart, {
 			model: input.modelId,
 			cwd: input.workingDirectory,
 			...permissionConfig,
@@ -238,7 +253,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		const permissionMode = await this.resolvePermissionMode(input.permissionModeId, state.workingDirectory);
 		const permissionConfig = this.codexPermissionConfig(permissionMode.id);
 		if (!state.loaded) {
-			await probe.client.request('thread/resume', {
+			await probe.client.request(CODEX_METHODS.threadResume, {
 				threadId: input.session.sessionId,
 				model: input.modelId,
 				...permissionConfig,
@@ -256,36 +271,27 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		this.submissions.set(submissionId, {
 			submissionId,
 			threadId: input.session.sessionId,
-			rpcMethod: 'turn/start',
+			rpcMethod: CODEX_METHODS.turnStart,
 			requestSentAt: new Date().toISOString(),
 		});
 		this.updateState(state, 'starting');
 		try {
-			const response = await probe.client.request<{ turn: CodexTurn }>('turn/start', {
+			const response = await probe.client.request<{ turn: CodexTurn }>(CODEX_METHODS.turnStart, {
 				threadId: input.session.sessionId,
 				clientUserMessageId: submissionId,
 				input: [{ type: 'text', text: input.message, text_elements: [] }],
-				additionalContext: {
-					'infinite-map/provider-trace-v1': {
-						kind: 'application',
-						value: JSON.stringify({
-							executionId: state.executionId,
-							protocolVersion: 1,
-							session: state.session,
-						}),
-					},
-				},
+				additionalContext: this.providerTraceContext(state),
 				model: input.modelId,
-					effort: input.effort || null,
-					...permissionConfig,
+				effort: input.effort || null,
+				...permissionConfig,
 				cwd: undefined,
 				outputSchema: AGENT_EXECUTION_RECEIPT_SCHEMA,
 			});
 			if (!response?.turn?.id) {
 				throw new Error('Codex turn/start response is missing turn.id.');
 			}
-				this.acceptSubmission(submissionId, response.turn.id);
-				state.session.permissionModeId = permissionMode.id;
+			this.acceptSubmission(submissionId, response.turn.id);
+			state.session.permissionModeId = permissionMode.id;
 			state.activeTurnId = response.turn.id;
 			state.session.turnId = response.turn.id;
 			this.updateState(state, 'running');
@@ -332,14 +338,15 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			submissionId,
 			threadId: input.session.sessionId,
 			expectedTurnId: input.expectedTurnId,
-			rpcMethod: 'turn/steer',
+			rpcMethod: CODEX_METHODS.turnSteer,
 			requestSentAt: new Date().toISOString(),
 		});
 		try {
-			const response = await (await this.ensureReady()).client.request<{ turnId: string }>('turn/steer', {
+			const response = await (await this.ensureReady()).client.request<{ turnId: string }>(CODEX_METHODS.turnSteer, {
 				threadId: input.session.sessionId,
 				clientUserMessageId: submissionId,
 				input: [{ type: 'text', text: input.message, text_elements: [] }],
+				additionalContext: this.providerTraceContext(state),
 				expectedTurnId: input.expectedTurnId,
 			});
 			this.acceptSubmission(submissionId, response.turnId);
@@ -374,14 +381,14 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				console.warn('Codex: skipping thread/name/set before first turn starts (best-effort)');
 			} else {
 				try {
-					await client.request('thread/name/set', { threadId: input.session.sessionId, name: input.value || null });
+					await client.request(CODEX_METHODS.threadNameSet, { threadId: input.session.sessionId, name: input.value || null });
 				} catch (error) {
 					// Best-effort: 命名失败不应阻塞任务执行
 					console.error('Codex thread/name/set failed (best-effort):', (error as Error).message || error);
 				}
 			}
 		} else if (input.operation === 'archive') {
-			await client.request('thread/archive', { threadId: input.session.sessionId });
+			await client.request(CODEX_METHODS.threadArchive, { threadId: input.session.sessionId });
 		} else {
 			throw new Error('Codex model changes are applied explicitly on the next turn.');
 		}
@@ -396,7 +403,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		}
 		this.updateState(state, 'interrupting');
 		try {
-			await (await this.ensureReady()).client.request('turn/interrupt', {
+			await (await this.ensureReady()).client.request(CODEX_METHODS.turnInterrupt, {
 				threadId: input.session.sessionId,
 				turnId,
 			});
@@ -467,26 +474,20 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			}
 			this.probe = undefined;
 		});
-		for (const method of [
-			'item/commandExecution/requestApproval',
-			'item/fileChange/requestApproval',
-			'tool/requestUserInput',
-			'mcpServer/elicitation/request',
-			'item/permissions/requestApproval',
-		]) {
-			probe.client.registerServerRequest(method, async (params) => {
+		for (const method of CODEX_PROTOCOL_SURFACE.serverRequests) {
+			probe.client.registerServerRequest(method, async (params, rpcRequestId) => {
 				const state = this.findState(params?.threadId);
 				if (!state) {
 					return this.serverRequestResult(method, params, 'deny');
 				}
-				const requestId = typeof params?.requestId === 'string' && params.requestId
-					? params.requestId
-					: randomUUID();
+				const requestId = rpcRequestId === undefined || rpcRequestId === null
+					? randomUUID()
+					: String(rpcRequestId);
 				this.emit(state, 'session.input.required', {
 					kind: method.includes('requestUserInput') || method.includes('elicitation') ? 'question' : 'approval',
 					requestId,
 					method,
-					title: params?.title || params?.reason || method,
+					title: params?.title || params?.reason || params?.message || method,
 					description: params?.description,
 					params,
 				});
@@ -517,7 +518,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		decision: 'approve' | 'deny',
 		value?: string
 	): unknown {
-		if (method === 'tool/requestUserInput') {
+		if (method === CODEX_METHODS.requestUserInput) {
 			const answers: Record<string, { answers: string[] }> = {};
 			for (const question of params?.questions || []) {
 				if (question?.id) {
@@ -526,14 +527,51 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			}
 			return { answers };
 		}
-		if (method === 'mcpServer/elicitation/request') {
+		if (method === CODEX_METHODS.mcpElicitation) {
 			let content: unknown = value ? { value } : {};
 			if (value) {
 				try { content = JSON.parse(value); } catch { /* Plain text is wrapped above. */ }
 			}
-			return decision === 'approve' ? { action: 'accept', content } : { action: 'decline' };
+			return decision === 'approve' ? { action: 'accept', content } : { action: 'decline', content: null };
 		}
-		return { decision: decision === 'approve' ? 'accept' : 'decline' };
+		if (method === CODEX_METHODS.permissionsApproval) {
+			return {
+				permissions: decision === 'approve' && params?.permissions ? params.permissions : {},
+				scope: 'turn',
+			};
+		}
+		return { decision: this.approvalDecision(params, decision) };
+	}
+
+	private approvalDecision(params: any, decision: 'approve' | 'deny'): 'accept' | 'decline' | 'cancel' {
+		const available = Array.isArray(params?.availableDecisions)
+			? params.availableDecisions.filter((candidate: unknown): candidate is string => typeof candidate === 'string')
+			: [];
+		const preferred = decision === 'approve' ? 'accept' : 'decline';
+		if (!available.length || available.includes(preferred)) {
+			return preferred;
+		}
+		// Never broaden an "approve once" click into a session or policy grant.
+		if (available.includes('decline')) {
+			return 'decline';
+		}
+		if (available.includes('cancel')) {
+			return 'cancel';
+		}
+		return decision === 'approve' ? 'accept' : 'decline';
+	}
+
+	private providerTraceContext(state: SessionState): Record<string, { kind: 'application'; value: string }> {
+		return {
+			'infinite-map/provider-trace-v1': {
+				kind: 'application',
+				value: JSON.stringify({
+					executionId: state.executionId,
+					protocolVersion: 1,
+					session: state.session,
+				}),
+			},
+		};
 	}
 
 	private handleNotification(notification: RpcNotification): void {
@@ -545,7 +583,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		}
 		const turnId = params.turn?.id || params.turnId || state.activeTurnId || '';
 		const itemId = params.item?.id || params.itemId || '';
-		const eventId = [notification.method, threadId || '', turnId, itemId, params.delta || ''].join(':');
+		const eventId = [notification.method, threadId || '', turnId, itemId, params.requestId ?? '', params.delta || ''].join(':');
 		if (this.eventIds.has(eventId)) {
 			return;
 		}
@@ -556,32 +594,54 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		}
 
 		switch (notification.method) {
-			case 'turn/started':
+			case CODEX_METHODS.turnStarted:
 				state.activeTurnId = turnId;
 				state.session.turnId = turnId;
 				this.observeSubmission(threadId, turnId);
 				this.updateState(state, 'running');
 				break;
-			case 'thread/status/changed':
-				this.emit(state, 'session.state.changed', params);
+			case CODEX_METHODS.threadStatusChanged:
+				this.updateState(state, this.mapThreadStatus(params.status?.type), {
+					providerThreadStatus: params.status,
+				});
 				break;
-			case 'item/agentMessage/delta':
-			case 'item/commandExecution/outputDelta':
+			case CODEX_METHODS.agentMessageDelta:
+			case CODEX_METHODS.commandOutputDelta:
 				this.emit(state, 'session.delta', { method: notification.method, ...params });
 				break;
-			case 'item/started':
+			case CODEX_METHODS.itemStarted:
 				this.emit(state, 'session.tool.started', params);
 				break;
-			case 'item/completed':
-			case 'turn/diff/updated':
+			case CODEX_METHODS.itemCompleted:
+			case CODEX_METHODS.turnDiffUpdated:
 				this.emit(state, 'session.tool.completed', { method: notification.method, ...params });
 				break;
-			case 'model/rerouted':
+			case CODEX_METHODS.modelRerouted:
 				state.effectiveModel = params.toModel;
 				state.session.modelId = params.toModel;
 				this.emit(state, 'session.state.changed', { requestedModel: params.fromModel, effectiveModel: params.toModel });
 				break;
-			case 'turn/completed': {
+			case CODEX_METHODS.turnError:
+				this.updateState(state, params.willRetry ? 'running' : 'failed', {
+					error: params.error?.message || String(params.error || 'Codex turn failed.'),
+					providerError: params.error,
+					willRetry: !!params.willRetry,
+				});
+				break;
+			case CODEX_METHODS.serverRequestResolved: {
+				const requestId = params.requestId === undefined || params.requestId === null
+					? ''
+					: String(params.requestId);
+				const pending = this.pendingServerRequests.get(requestId);
+				if (pending && pending.sessionId === state.session.sessionId) {
+					clearTimeout(pending.timer);
+					this.pendingServerRequests.delete(requestId);
+					pending.resolve(this.serverRequestResult(pending.method, pending.params, 'deny'));
+					this.emit(state, 'session.input.resolved', { requestId, method: pending.method });
+				}
+				break;
+			}
+			case CODEX_METHODS.turnCompleted: {
 				const status = params.turn?.status;
 				state.activeTurnId = undefined;
 				state.session.turnId = turnId || state.session.turnId;
@@ -605,7 +665,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 	}
 
 	private async reconcileThread(threadId: string): Promise<void> {
-		const response = await (await this.ensureProbe()).client.request<{ thread: CodexThread }>('thread/read', {
+		const response = await (await this.ensureProbe()).client.request<{ thread: CodexThread }>(CODEX_METHODS.threadRead, {
 			threadId,
 			includeTurns: true,
 		});
@@ -967,6 +1027,21 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 
 	private isStaleTurn(error: unknown): boolean {
 		return error instanceof CodexRpcError && /expected.*turn|active.*turn|stale/i.test(error.message);
+	}
+
+	private isMethodUnavailable(error: unknown): boolean {
+		return error instanceof CodexRpcError &&
+			(error.code === -32601 || /method not found|unsupported/i.test(error.message));
+	}
+
+	private mapThreadStatus(type: unknown): SessionSnapshot['status'] {
+		switch (type) {
+			case 'active': return 'running';
+			case 'idle': return 'idle';
+			case 'notLoaded': return 'disconnected';
+			case 'systemError': return 'failed';
+			default: return 'disconnected';
+		}
 	}
 
 	private withCode(code: string, message: string): Error {

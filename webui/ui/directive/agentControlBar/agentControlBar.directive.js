@@ -811,6 +811,10 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 						if (value.type === 'session.input.required' && value.payload && value.payload.requestId) {
 							scope.agentControl.inputRequest = Object.assign({ value: '', resolving: false }, value.payload);
 						}
+						if (value.type === 'session.input.resolved' && value.payload && scope.agentControl.inputRequest &&
+							value.payload.requestId === scope.agentControl.inputRequest.requestId) {
+							scope.agentControl.inputRequest = null;
+						}
 						if (value.type === 'session.state.changed' && value.payload) {
 							var status = sessionEventStatus(value.payload);
 							if (status) scope.agentControl.session.status = status;

@@ -502,6 +502,25 @@ test('outside clicks collapse the bar, dismiss transient menus, and preserve col
 
   emitSessionEvent({
     executionId: 'execution-collapsed',
+    type: 'session.input.required',
+    payload: { requestId: 'approval-2', title: 'Run another command' }
+  });
+  emitSessionEvent({
+    executionId: 'execution-collapsed',
+    type: 'session.input.resolved',
+    payload: { requestId: 'different-approval' }
+  });
+  assert.equal(scope.agentControl.inputRequest.requestId, 'approval-2');
+  emitSessionEvent({
+    executionId: 'execution-collapsed',
+    type: 'session.input.resolved',
+    payload: { requestId: 'approval-2' }
+  });
+  assert.equal(scope.agentControl.inputRequest, null);
+  assert.equal(scope.agentControl.collapsed, true);
+
+  emitSessionEvent({
+    executionId: 'execution-collapsed',
     type: 'session.state.changed',
     payload: { status: 'failed', activeTurnId: null, error: 'Runtime failed' }
   });

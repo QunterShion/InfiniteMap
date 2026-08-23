@@ -20,8 +20,16 @@ class MockEventEmitter {
 }
 
 require('ts-node/register/transpile-only');
-const { CodexAppServerClient } = require('../src/providers/codex/CodexAppServerClient.ts');
+const { CodexAppServerClient, CodexRpcError } = require('../src/providers/codex/CodexAppServerClient.ts');
 const { CodexRuntimeManager } = require('../src/providers/codex/CodexRuntimeManager.ts');
+const {
+  AGENT_EXECUTION_RECEIPT_SCHEMA,
+  CODEX_METHODS,
+  CODEX_PROTOCOL_SURFACE,
+  assertCodexGeneratedProtocolSurface,
+  assertCodexGeneratedServerResponses,
+  assertStrictOutputSchema
+} = require('../src/providers/codex/protocol.ts');
 const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
   if (request === 'vscode') return { EventEmitter: MockEventEmitter };
@@ -98,7 +106,7 @@ test('Codex app-server client handshakes, paginates models, and handles server r
   });
   const notifications = [];
   client.onNotification((notification) => notifications.push(notification));
-  client.registerServerRequest('tool/requestUserInput', async (params) => ({ answers: params.questions.length }));
+  client.registerServerRequest(CODEX_METHODS.requestUserInput, async (params) => ({ answers: params.questions.length }));
 
   await client.start();
   const models = await client.readModels();
@@ -109,7 +117,7 @@ test('Codex app-server client handshakes, paginates models, and handles server r
   assert.equal(fake.requests.filter((request) => request.method === 'model/list').length, 2);
 
   fake.send({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } });
-  fake.send({ id: 99, method: 'tool/requestUserInput', params: { questions: [{ id: 'q' }] } });
+  fake.send({ id: 99, method: CODEX_METHODS.requestUserInput, params: { questions: [{ id: 'q' }] } });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(notifications[0].method, 'turn/started');
   assert.deepEqual(fake.clientResponses.find((response) => response.id === 99).result, { answers: 1 });
@@ -124,9 +132,138 @@ test('Codex permission RPCs, handshake, and generated schema use one capability 
   assert.match(clientSource, /capabilities:\s*\{\s*experimentalApi:\s*true\s*\}/);
   assert.doesNotMatch(clientSource, /capabilities:[^\n]*null/);
   assert.match(runtimeSource, /generate-json-schema', '--experimental', '--out'/);
-  assert.match(adapterSource, /'permissionProfile\/list'/);
+  assert.match(adapterSource, /CODEX_METHODS\.permissionProfileList/);
   assert.match(adapterSource, /permissions:/);
   assert.match(adapterSource, /approvalsReviewer:/);
+});
+
+test('Codex protocol inventory covers 32 integrated methods and rejects missing generated capabilities', () => {
+  assert.equal(CODEX_PROTOCOL_SURFACE.clientRequests.length, 14);
+  assert.equal(CODEX_PROTOCOL_SURFACE.clientNotifications.length, 1);
+  assert.equal(CODEX_PROTOCOL_SURFACE.serverRequests.length, 5);
+  assert.equal(CODEX_PROTOCOL_SURFACE.serverNotifications.length, 12);
+  assert.equal(
+    Object.values(CODEX_PROTOCOL_SURFACE).reduce((total, methods) => total + methods.length, 0),
+    32
+  );
+  const requiredParams = {
+    [CODEX_METHODS.initialize]: ['capabilities'],
+    [CODEX_METHODS.accountLoginStart]: ['type'],
+    [CODEX_METHODS.threadStart]: ['approvalPolicy', 'approvalsReviewer', 'config', 'developerInstructions', 'permissions'],
+    [CODEX_METHODS.threadResume]: ['approvalPolicy', 'approvalsReviewer', 'permissions'],
+    [CODEX_METHODS.turnStart]: [
+      'additionalContext', 'approvalPolicy', 'approvalsReviewer', 'clientUserMessageId',
+      'effort', 'outputSchema', 'permissions'
+    ],
+    [CODEX_METHODS.turnSteer]: ['additionalContext', 'clientUserMessageId', 'expectedTurnId']
+  };
+  const schemaFor = (methods) => ({
+    oneOf: methods.map((method) => ({
+      properties: {
+        method: { enum: [method] },
+        params: {
+          type: 'object',
+          properties: Object.fromEntries((requiredParams[method] || []).map((field) => [field, {}]))
+        }
+      }
+    }))
+  });
+  const schemas = {
+    clientRequests: schemaFor(CODEX_PROTOCOL_SURFACE.clientRequests),
+    clientNotifications: schemaFor(CODEX_PROTOCOL_SURFACE.clientNotifications),
+    serverRequests: schemaFor(CODEX_PROTOCOL_SURFACE.serverRequests),
+    serverNotifications: schemaFor(CODEX_PROTOCOL_SURFACE.serverNotifications)
+  };
+  assert.doesNotThrow(() => assertCodexGeneratedProtocolSurface(schemas));
+  assert.throws(
+    () => assertCodexGeneratedProtocolSurface({ ...schemas, clientRequests: schemaFor([CODEX_METHODS.initialize]) }),
+    /schema is missing required methods/
+  );
+  const withoutPermissions = schemaFor(CODEX_PROTOCOL_SURFACE.clientRequests);
+  delete withoutPermissions.oneOf.find((entry) => entry.properties.method.enum[0] === CODEX_METHODS.turnStart)
+    .properties.params.properties.permissions;
+  assert.throws(
+    () => assertCodexGeneratedProtocolSurface({ ...schemas, clientRequests: withoutPermissions }),
+    /turn\/start params schema is missing required integration fields: permissions/
+  );
+
+  const responseSchema = (properties, enums = []) => ({
+    type: 'object',
+    required: properties,
+    properties: Object.fromEntries(properties.map((field) => [field, {}])),
+    definitions: { values: { enum: enums } }
+  });
+  const responses = {
+    commandApproval: responseSchema(['decision'], ['accept', 'decline', 'cancel']),
+    fileChangeApproval: responseSchema(['decision'], ['accept', 'decline', 'cancel']),
+    requestUserInput: responseSchema(['answers']),
+    mcpElicitation: responseSchema(['action'], ['accept', 'decline', 'cancel']),
+    permissionsApproval: responseSchema(['permissions', 'scope'], ['turn', 'session'])
+  };
+  assert.doesNotThrow(() => assertCodexGeneratedServerResponses(responses));
+  assert.throws(
+    () => assertCodexGeneratedServerResponses({ ...responses, requestUserInput: responseSchema([]) }),
+    /requestUserInput response schema is missing fields: answers/
+  );
+});
+
+test('Codex output schema is recursively strict and uses nullable required fields', () => {
+  assert.doesNotThrow(() => assertStrictOutputSchema(AGENT_EXECUTION_RECEIPT_SCHEMA));
+  assert.deepEqual(AGENT_EXECUTION_RECEIPT_SCHEMA.properties.validations.items.required,
+    ['command', 'name', 'passed', 'evidence']);
+  assert.deepEqual(AGENT_EXECUTION_RECEIPT_SCHEMA.properties.validations.items.properties.command.type,
+    ['string', 'null']);
+  assert.ok(AGENT_EXECUTION_RECEIPT_SCHEMA.required.includes('blocker'));
+  assert.deepEqual(AGENT_EXECUTION_RECEIPT_SCHEMA.properties.blocker.type, ['string', 'null']);
+  assert.throws(() => assertStrictOutputSchema({
+    type: 'object', additionalProperties: false, properties: { missing: { type: 'string' } }, required: []
+  }), /missing required fields: missing/);
+});
+
+test('Codex permission discovery falls back only for an unavailable method and surfaces operational errors', async () => {
+  const model = {
+    id: 'codex-test', model: 'codex-test', displayName: 'Codex Test', hidden: false,
+    isDefault: true, defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: [{ reasoningEffort: 'medium', description: 'Medium' }]
+  };
+  const runtimeFor = (permissionError) => ({
+    probe: async () => ({
+      authenticated: true,
+      models: [model],
+      client: {
+        onNotification: () => () => undefined,
+        onDisconnect: () => () => undefined,
+        registerServerRequest: () => () => undefined,
+        request: async (method) => {
+          if (method === CODEX_METHODS.permissionProfileList) throw permissionError;
+          if (method === CODEX_METHODS.threadStart) {
+            return { thread: { id: 'thread-discovery' }, model: 'codex-test', reasoningEffort: 'medium' };
+          }
+          return {};
+        }
+      }
+    })
+  });
+
+  const legacyAdapter = new CodexAgentSessionAdapter(runtimeFor(
+    new CodexRpcError(-32601, 'Method not found: permissionProfile/list')
+  ));
+  const legacySession = await legacyAdapter.createSession({
+    executionId: 'exec-legacy', workingDirectory: '/workspace', modelId: 'codex-test', effort: 'medium',
+    mcpServer: { command: '/usr/bin/node', args: [] }
+  });
+  assert.equal(legacySession.permissionModeId, 'codex:ask');
+  legacyAdapter.dispose();
+
+  const failedAdapter = new CodexAgentSessionAdapter(runtimeFor(new Error('permission service disconnected')));
+  await assert.rejects(
+    failedAdapter.createSession({
+      executionId: 'exec-discovery-failed', workingDirectory: '/workspace', modelId: 'codex-test', effort: 'medium',
+      mcpServer: { command: '/usr/bin/node', args: [] }
+    }),
+    /permission service disconnected/
+  );
+  failedAdapter.dispose();
 });
 
 test('Codex runtime rejects private VS Code extension binaries discovered on PATH', () => {
@@ -138,6 +275,74 @@ test('Codex runtime rejects private VS Code extension binaries discovered on PAT
   assert.equal(runtime.isPrivateExtensionBinary('/opt/homebrew/bin/codex'), false);
 });
 
+test('Codex authentication uses the app-server browser flow and waits for the matching completion', async () => {
+  const listeners = new Set();
+  const calls = [];
+  const client = {
+    onNotification(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    onDisconnect: () => () => undefined,
+    request: async (method, params) => {
+      calls.push({ method, params });
+      return {
+        type: 'chatgpt',
+        loginId: 'login-1',
+        authUrl: 'https://chatgpt.com/auth/codex-test'
+      };
+    }
+  };
+  const runtime = new CodexRuntimeManager({ storagePath: '/tmp/unused-auth' });
+  runtime.probe = async () => ({ authenticated: false, client });
+  let invalidated = false;
+  runtime.invalidate = () => { invalidated = true; };
+
+  await runtime.authenticate(async (url) => {
+    assert.equal(url, 'https://chatgpt.com/auth/codex-test');
+    setImmediate(() => {
+      for (const listener of listeners) {
+        listener({
+          method: CODEX_METHODS.accountLoginCompleted,
+          params: { loginId: 'login-1', success: true, error: null }
+        });
+      }
+    });
+    return true;
+  });
+
+  assert.deepEqual(calls, [{
+    method: CODEX_METHODS.accountLoginStart,
+    params: { type: 'chatgpt', useHostedLoginSuccessPage: true, appBrand: 'codex' }
+  }]);
+  assert.equal(invalidated, true);
+  assert.equal(listeners.size, 0);
+});
+
+test('Codex unauthenticated descriptor remains auth_required without calling protected RPCs', async () => {
+  let requestCalls = 0;
+  const adapter = new CodexAgentSessionAdapter({
+    probe: async () => ({
+      authenticated: false,
+      models: [],
+      client: {
+        onNotification: () => () => undefined,
+        onDisconnect: () => () => undefined,
+        registerServerRequest: () => () => undefined,
+        request: async () => {
+          requestCalls += 1;
+          throw new Error('protected RPC should not run');
+        }
+      }
+    })
+  });
+  const descriptor = await adapter.getDescriptor();
+  assert.equal(descriptor.installState, 'auth_required');
+  assert.deepEqual(descriptor.permissionModes, []);
+  assert.equal(requestCalls, 0);
+  adapter.dispose();
+});
+
 test('Codex starts a fresh thread once and supplies full trace context on the first turn', async () => {
   const calls = [];
   const client = {
@@ -146,11 +351,20 @@ test('Codex starts a fresh thread once and supplies full trace context on the fi
     registerServerRequest: () => () => undefined,
     request: async (method, params) => {
       calls.push({ method, params });
+      if (method === CODEX_METHODS.permissionProfileList) {
+        return { data: [{ id: ':workspace', allowed: true }], nextCursor: null };
+      }
+      if (method === CODEX_METHODS.configRequirementsRead) {
+        return { requirements: { allowedApprovalPolicies: ['on-request'], allowedApprovalsReviewers: ['user'] } };
+      }
       if (method === 'thread/start') {
         return { thread: { id: 'thread-fresh' }, model: 'codex-test', reasoningEffort: 'medium' };
       }
       if (method === 'turn/start') {
         return { turn: { id: 'turn-fresh', status: 'inProgress' } };
+      }
+      if (method === CODEX_METHODS.turnSteer) {
+        return { turnId: 'turn-fresh' };
       }
       return {};
     }
@@ -185,6 +399,15 @@ test('Codex starts a fresh thread once and supplies full trace context on the fi
   assert.equal(trace.executionId, 'exec-fresh');
   assert.equal(trace.session.sessionId, 'thread-fresh');
   assert.equal(trace.session.threadId, 'thread-fresh');
+
+  await adapter.append({
+    executionId: 'exec-fresh', session, message: 'Add context', modelId: 'codex-test', effort: 'medium',
+    expectedTurnId: 'turn-fresh', idempotencyKey: 'submission-steer'
+  });
+  const turnSteer = calls.find((call) => call.method === CODEX_METHODS.turnSteer);
+  const steerTrace = JSON.parse(turnSteer.params.additionalContext['infinite-map/provider-trace-v1'].value);
+  assert.equal(steerTrace.executionId, 'exec-fresh');
+  assert.equal(steerTrace.session.sessionId, 'thread-fresh');
   adapter.dispose();
 });
 
@@ -194,6 +417,12 @@ test('Codex preserves the original turn error when a fresh rollout cannot be rec
     onDisconnect: () => () => undefined,
     registerServerRequest: () => () => undefined,
     request: async (method) => {
+      if (method === CODEX_METHODS.permissionProfileList) {
+        return { data: [{ id: ':workspace', allowed: true }], nextCursor: null };
+      }
+      if (method === CODEX_METHODS.configRequirementsRead) {
+        return { requirements: { allowedApprovalPolicies: ['on-request'], allowedApprovalsReviewers: ['user'] } };
+      }
       if (method === 'thread/start') {
         return { thread: { id: 'thread-no-rollout' }, model: 'codex-test', reasoningEffort: 'medium' };
       }
@@ -229,11 +458,21 @@ test('Codex preserves the original turn error when a fresh rollout cannot be rec
 
 test('Codex Server Request remains pending until InfiniteMap returns the user decision', async () => {
   const handlers = new Map();
+  let notificationListener;
   const client = {
-    onNotification: () => () => undefined,
+    onNotification: (listener) => {
+      notificationListener = listener;
+      return () => { notificationListener = undefined; };
+    },
     onDisconnect: () => () => undefined,
     registerServerRequest: (method, handler) => handlers.set(method, handler),
     request: async (method) => {
+      if (method === CODEX_METHODS.permissionProfileList) {
+        return { data: [{ id: ':workspace', allowed: true }], nextCursor: null };
+      }
+      if (method === CODEX_METHODS.configRequirementsRead) {
+        return { requirements: { allowedApprovalPolicies: ['on-request'], allowedApprovalsReviewers: ['user'] } };
+      }
       if (method === 'thread/start') {
         return { thread: { id: 'thread-approval' }, model: 'codex-test', reasoningEffort: 'medium' };
       }
@@ -258,6 +497,8 @@ test('Codex Server Request remains pending until InfiniteMap returns the user de
     executionId: 'exec-approval', workingDirectory: '/workspace', modelId: 'codex-test', effort: 'medium',
     mcpServer: { command: '/usr/bin/node', args: ['/extension/dist/mcp/server.js'] }
   });
+  assert.equal(handlers.has(CODEX_METHODS.requestUserInput), true);
+  assert.equal(handlers.has('tool/requestUserInput'), false);
   const response = handlers.get('item/commandExecution/requestApproval')({
     threadId: session.sessionId,
     title: 'Run command'
@@ -271,5 +512,119 @@ test('Codex Server Request remains pending until InfiniteMap returns the user de
     decision: 'approve'
   });
   assert.deepEqual(await response, { decision: 'accept' });
+
+  const fileChangeResponse = handlers.get(CODEX_METHODS.fileChangeApproval)({
+    threadId: session.sessionId,
+    turnId: 'turn-file-change',
+    itemId: 'item-file-change',
+    reason: 'Update generated files',
+    availableDecisions: ['accept', 'decline']
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const fileChangeInput = events.filter((event) => event.type === 'session.input.required').at(-1);
+  await adapter.respondToInput({
+    session,
+    requestId: fileChangeInput.payload.requestId,
+    decision: 'approve'
+  });
+  assert.deepEqual(await fileChangeResponse, { decision: 'accept' });
+
+  const questionResponse = handlers.get(CODEX_METHODS.requestUserInput)({
+    threadId: session.sessionId,
+    turnId: 'turn-question',
+    itemId: 'item-question',
+    questions: [{ id: 'target', header: 'Target', question: 'Which target?', options: [] }]
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const questionInput = events.filter((event) => event.type === 'session.input.required').at(-1);
+  await adapter.respondToInput({
+    session,
+    requestId: questionInput.payload.requestId,
+    decision: 'approve',
+    value: 'workspace'
+  });
+  assert.deepEqual(await questionResponse, { answers: { target: { answers: ['workspace'] } } });
+
+  const requestedPermissions = {
+    network: { enabled: true },
+    fileSystem: { write: ['/workspace/generated'] }
+  };
+  const permissionResponse = handlers.get(CODEX_METHODS.permissionsApproval)({
+    threadId: session.sessionId,
+    turnId: 'turn-permissions',
+    itemId: 'item-permissions',
+    cwd: '/workspace',
+    startedAtMs: Date.now(),
+    permissions: requestedPermissions
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const permissionInput = events.filter((event) => event.type === 'session.input.required').at(-1);
+  await adapter.respondToInput({
+    session,
+    requestId: permissionInput.payload.requestId,
+    decision: 'approve'
+  });
+  assert.deepEqual(await permissionResponse, { permissions: requestedPermissions, scope: 'turn' });
+
+  const deniedPermissions = handlers.get(CODEX_METHODS.permissionsApproval)({
+    threadId: session.sessionId,
+    turnId: 'turn-permissions-denied',
+    itemId: 'item-permissions-denied',
+    cwd: '/workspace',
+    startedAtMs: Date.now(),
+    permissions: requestedPermissions
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const deniedInput = events.filter((event) => event.type === 'session.input.required').at(-1);
+  await adapter.respondToInput({ session, requestId: deniedInput.payload.requestId, decision: 'deny' });
+  assert.deepEqual(await deniedPermissions, { permissions: {}, scope: 'turn' });
+
+  const elicitationResponse = handlers.get(CODEX_METHODS.mcpElicitation)({
+    threadId: session.sessionId,
+    mode: 'form',
+    message: 'Enter a value',
+    requestedSchema: { type: 'object' }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const elicitationInput = events.filter((event) => event.type === 'session.input.required').at(-1);
+  await adapter.respondToInput({ session, requestId: elicitationInput.payload.requestId, decision: 'deny' });
+  assert.deepEqual(await elicitationResponse, { action: 'decline', content: null });
+
+  const autoResolvedResponse = handlers.get(CODEX_METHODS.commandApproval)({
+    threadId: session.sessionId,
+    turnId: 'turn-auto-resolved',
+    itemId: 'item-auto-resolved',
+    startedAtMs: Date.now()
+  }, 'rpc-auto-resolved');
+  await new Promise((resolve) => setImmediate(resolve));
+  notificationListener({
+    method: CODEX_METHODS.serverRequestResolved,
+    params: { threadId: session.sessionId, requestId: 'rpc-auto-resolved' }
+  });
+  assert.deepEqual(await autoResolvedResponse, { decision: 'decline' });
+  assert.deepEqual(events.at(-1).payload, {
+    requestId: 'rpc-auto-resolved',
+    method: CODEX_METHODS.commandApproval
+  });
+  assert.equal(events.at(-1).type, 'session.input.resolved');
+
+  notificationListener({
+    method: CODEX_METHODS.threadStatusChanged,
+    params: { threadId: session.sessionId, status: { type: 'active', activeFlags: [] } }
+  });
+  assert.equal(events.at(-1).payload.status, 'running');
+  assert.deepEqual(events.at(-1).payload.providerThreadStatus, { type: 'active', activeFlags: [] });
+
+  notificationListener({
+    method: CODEX_METHODS.turnError,
+    params: {
+      threadId: session.sessionId,
+      turnId: 'turn-failed',
+      willRetry: false,
+      error: { message: 'Structured output rejected' }
+    }
+  });
+  assert.equal(events.at(-1).payload.status, 'failed');
+  assert.equal(events.at(-1).payload.error, 'Structured output rejected');
   adapter.dispose();
 });

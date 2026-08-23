@@ -1,3 +1,4 @@
+> 2026-08-23 更新：当前实现已完成 32 个 JSON-RPC 方法的代码级审计、生成 Schema 启动校验和 5 类服务端回执校验。最新集成清单与修复结论见 [`codex-app-server-integration-audit.md`](./codex-app-server-integration-audit.md)。本文保留早期方案论证，若与审计文档或当前生成 Schema 冲突，以后两者为准。
 
 我按你这份 `editor-agent-session-task-execution-design.md` 中**所有涉及 Codex App Server 的调用点**，对照了当前官方 App Server 文档和 OpenAI Codex 官方仓库。
 
@@ -258,7 +259,8 @@ interface AgentExecutionReceipt {
   summary: string;
   artifacts: ...;
   validations: ...;
-  collaborationChildren?: string[];
+  collaborationChildren: string[];
+  blocker: string | null;
 }
 ```
 

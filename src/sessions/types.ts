@@ -211,6 +211,7 @@ export interface AgentSessionEventPayload {
 		| 'session.tool.started'
 		| 'session.tool.completed'
 		| 'session.input.required'
+		| 'session.input.resolved'
 		| 'session.completed'
 		| 'taskState.changed'
 		| 'history.changed';

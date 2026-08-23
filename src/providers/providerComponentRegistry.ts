@@ -241,6 +241,12 @@ export class ProviderComponentRegistry implements vscode.Disposable {
 				}
 			},
 			createAdapter: async () => new CodexAgentSessionAdapter(this.codexRuntime as CodexRuntimeManager),
+			authenticate: async () => {
+				await (this.codexRuntime as CodexRuntimeManager).authenticate(async (url) =>
+					vscode.env.openExternal(vscode.Uri.parse(url))
+				);
+				this.changeEmitter.fire();
+			},
 		};
 	}
 

@@ -1,7 +1,7 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import { EventEmitter } from 'events';
 import * as readline from 'readline';
-import { AppServerMessage, CodexModel, RpcNotification, RpcRequest, RpcResponse } from './protocol';
+import { AppServerMessage, CODEX_METHODS, CodexModel, RpcNotification, RpcRequest, RpcResponse } from './protocol';
 
 interface PendingRequest {
 	resolve(value: any): void;
@@ -24,8 +24,11 @@ export class CodexRpcError extends Error {
 
 export class CodexAppServerClient {
 	private readonly emitter = new EventEmitter();
-	private readonly pending = new Map<number, PendingRequest>();
-	private readonly serverRequestHandlers = new Map<string, (params: any) => Promise<unknown>>();
+	private readonly pending = new Map<RpcRequest['id'], PendingRequest>();
+	private readonly serverRequestHandlers = new Map<
+		string,
+		(params: any, requestId: RpcRequest['id']) => Promise<unknown>
+	>();
 	private process: ChildProcessWithoutNullStreams | undefined;
 	private nextId = 1;
 	private disposed = false;
@@ -46,7 +49,7 @@ export class CodexAppServerClient {
 
 	public registerServerRequest(
 		method: string,
-		handler: (params: any) => Promise<unknown>
+		handler: (params: any, requestId: RpcRequest['id']) => Promise<unknown>
 	): () => void {
 		this.serverRequestHandlers.set(method, handler);
 		return () => this.serverRequestHandlers.delete(method);
@@ -69,7 +72,7 @@ export class CodexAppServerClient {
 			this.handleDisconnect(new Error(`Codex app-server exited (${code ?? signal ?? 'unknown'}).`));
 		});
 
-		await this.request('initialize', {
+		await this.request(CODEX_METHODS.initialize, {
 			clientInfo: {
 				name: 'infinite_map_vscode',
 				title: 'InfiniteMap Codex Provider',
@@ -81,7 +84,7 @@ export class CodexAppServerClient {
 			// profile RPC or thread request is sent.
 			capabilities: { experimentalApi: true },
 		});
-		this.notify('initialized', {});
+		this.notify(CODEX_METHODS.initialized, {});
 		this.initialized = true;
 		// Codex-P1-01：排空初始化期间缓冲的通知，确保 handler 已注册后再派发
 		for (const notification of this.pendingInitNotifications.splice(0)) {
@@ -119,7 +122,7 @@ export class CodexAppServerClient {
 		const models: CodexModel[] = [];
 		let cursor: string | null = null;
 		do {
-			const page: { data: CodexModel[]; nextCursor: string | null } = await this.request('model/list', {
+			const page: { data: CodexModel[]; nextCursor: string | null } = await this.request(CODEX_METHODS.modelList, {
 				cursor,
 				includeHidden: false,
 			});
@@ -207,7 +210,7 @@ export class CodexAppServerClient {
 			return;
 		}
 		try {
-			this.write({ id: request.id, result: await handler(request.params) });
+			this.write({ id: request.id, result: await handler(request.params, request.id) });
 		} catch (error) {
 			this.write({
 				id: request.id,

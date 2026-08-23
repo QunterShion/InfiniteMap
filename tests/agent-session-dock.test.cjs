@@ -86,6 +86,7 @@ test('session dock exposes activity and history as accessible right-edge tabs wi
   const sessionLess = read('webui/less/agentSession.less');
   const editorLess = read('webui/less/editor.less');
   const dockLess = read('webui/less/agentSessionDock.less');
+	const detailTemplate = read('webui/ui/directive/agentSessionDetail/agentSessionDetail.html');
 
   assert.match(dockTemplate, /role="tablist"/);
   assert.equal((dockTemplate.match(/role="tab"/g) || []).length, 2);
@@ -98,6 +99,9 @@ test('session dock exposes activity and history as accessible right-edge tabs wi
   assert.match(editorTemplate, /agent-session-dock/);
 	assert.match(editorTemplate, /agent-session-detail/);
 	assert.match(detailDirective, /agent-session-live-detail/);
+	for (const template of [dockTemplate, activityTemplate, historyTemplate, detailTemplate]) {
+		assert.match(template, /data-agent-control-surface/);
+	}
 	assert.match(activityTemplate, /activity\.visible && !sessionDetail\.visible/);
 	assert.match(historyTemplate, /history\.visible && !sessionDetail\.visible/);
 	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?width: ~"min\(42ch,/);
@@ -105,7 +109,7 @@ test('session dock exposes activity and history as accessible right-edge tabs wi
 	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?transform:\s*translate\(-50%, -50%\)/);
 	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?height: ~"min\(calc\(var\(--spacing\) \* 88\)/);
 	assert.match(sessionLess, /\[data-slot="session-detail-body"\][\s\S]*?overflow-y:\s*auto/);
-	assert.match(read('webui/ui/directive/agentSessionDetail/agentSessionDetail.html'), /data-slot="session-detail-body" role="region" tabindex="0"/);
+	assert.match(detailTemplate, /data-slot="session-detail-body" role="region" tabindex="0"/);
 	assert.doesNotMatch(editorLess, /agentSessionLog\.less/);
   assert.match(editorLess, /agentSessionDock\.less/);
   assert.match(dockLess, /right:\s*0/);

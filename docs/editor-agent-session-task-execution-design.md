@@ -747,8 +747,8 @@ Codex 使用官方 `codex app-server` stdio JSONL 协议：
 - 首次使用时由主扩展安装器把 Codex runtime 安装到 `globalStorage`，随后懒启动 app-server；主 InfiniteMap VSIX 不包含平台二进制。
 - 连接后先注册通知/Server Request 处理器，再发送 `initialize` 和 `initialized`；随后执行 `account/read`、完整分页 `model/list`，必要时读取 model/provider capability。
 - `clientInfo.name` 使用明确的集成标识，如 `infinite_map_vscode`，不得冒用 `codex_vscode`。
-- 默认使用稳定 API，不启用 `experimentalApi`；需要分页 turns/items 时另设实验特性开关。
-- 内置 Codex Adapter 通过 `codex app-server generate-json-schema` 获取与安装版本匹配的协议结构；runtime 版本变化时失效旧 schema/capability 缓存。
+- 控制条使用 `permissionProfile/list` 和 `thread/start.permissions`，因此 App Server 握手必须固定声明 `capabilities.experimentalApi=true`；所有实验字段只能在该握手完成后发送。
+- 内置 Codex Adapter 通过 `codex app-server generate-json-schema --experimental` 获取与安装版本及 capability 表面匹配的协议结构；runtime 版本变化时失效旧 schema/capability 缓存。
 - `sessionId` 和 `threadId` 都使用 `thread.id`；服务返回的 `thread.sessionId` 仅作为 session tree ID，不得混作会话主键。
 - `model/list` 返回的默认模型和 effort 是 UI 唯一事实来源，`includeHidden` 默认 false；账号、runtime 或 app-server 重启后重新读取。
 - 使用 `outputSchema` 强制回执结构。
@@ -768,7 +768,7 @@ Ready 判定必须完成整条链路，不能只检查文件存在：
 codex --version
 → spawn("codex", ["app-server"])
 → 注册 response / notification / server-request handlers
-→ initialize(clientInfo.name = "infinite_map_vscode")
+→ initialize(clientInfo.name = "infinite_map_vscode", capabilities.experimentalApi = true)
 → initialized
 → account/read
 → model/list（分页读完，includeHidden=false）
@@ -776,7 +776,7 @@ codex --version
 → ready | auth_required | degraded | incompatible
 ```
 
-runtime fingerprint 至少包含 executable realpath、Codex version、binary mtime/hash 和 experimentalApi 开关。每个 fingerprint 通过当前可执行文件生成 JSON Schema，写入 InfiniteMap `globalStorage/codex-state`；多窗口用锁与临时目录 + atomic rename 防止生成半成品。版本变化立即失效旧 schema、model 和 capability 缓存。解析采用 tolerant reader：未知附加字段/通知记录后忽略；核心请求、响应或必需字段不兼容时标记 `incompatible`，禁止新建 turn，但保留本地历史。
+runtime fingerprint 至少包含 executable realpath、Codex version、binary mtime/hash 和固定启用的 experimentalApi capability。每个 fingerprint 通过当前可执行文件生成包含实验表面的 JSON Schema，写入 InfiniteMap `globalStorage/codex-state`；多窗口用锁与临时目录 + atomic rename 防止生成半成品。版本变化立即失效旧 schema、model 和 capability 缓存。解析采用 tolerant reader：未知附加字段/通知记录后忽略；核心请求、响应或必需字段不兼容时标记 `incompatible`，禁止新建 turn，但保留本地历史。
 
 #### 12.3.2 Thread、Turn 与提交幂等
 
@@ -792,7 +792,7 @@ interface CodexSubmissionState {
 }
 ```
 
-- 创建会话用 `thread/start`；首个持久化 Turn 后再 best-effort 调 `thread/name/set`。
+- 创建会话只调用一次 `thread/start`，不得在首个 Turn 前紧接 `thread/resume`；创建期 trace seed 放入 `developerInstructions`，完整 Provider trace 通过每次 `turn/start.additionalContext` 提供。首个持久化 Turn 后再 best-effort 调 `thread/name/set`。
 - 首次发送或 idle 后续发送使用 `turn/start`，把用户正文、model、effort、cwd 与 `outputSchema` 放在同一次请求中。
 - 活动 Turn 的追加发送使用 `turn/steer(expectedTurnId)`；它不产生新 `turn/started`，也不能改变 model/effort/cwd/outputSchema。
 - 每次发送生成 `submissionId`，同时记录 RPC response 和先到达的事件；断线/超时后先 `thread/read` 对账，确认未接受才允许重试，避免重复 Turn。

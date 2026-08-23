@@ -6,12 +6,13 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 			restrict: 'A',
 			replace: true,
 			templateUrl: 'ui/directive/agentControlBar/agentControlBar.html',
-			link: function(scope) {
-				var AGENT_ACTION_TIMEOUT_MS = 30000;
-				var modelLoadProviderId = null;
-				var agentActionSequence = 0;
-				var agentActionTimeoutId = null;
-				var retryAgentAction = null;
+				link: function(scope, element) {
+					var AGENT_ACTION_TIMEOUT_MS = 30000;
+					var modelLoadProviderId = null;
+					var agentActionSequence = 0;
+					var agentActionTimeoutId = null;
+					var retryAgentAction = null;
+					var controlBarElement = element && element[0];
 				scope.agentControl = {
 					providers: [],
 					models: [],
@@ -31,8 +32,68 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 					collapsed: false,
 					providerMenuOpen: false,
 					permissionMenuOpen: false,
-					configMenuOpen: false
-				};
+						configMenuOpen: false
+					};
+
+					function closeTransientSurfaces() {
+						var changed = !!(
+							scope.agentControl.providerMenuOpen ||
+							scope.agentControl.permissionMenuOpen ||
+							scope.agentControl.configMenuOpen ||
+							scope.agentControl.installCandidate ||
+							scope.agentControl.authCandidate ||
+							scope.agentControl.permissionModeCandidate
+						);
+						scope.agentControl.providerMenuOpen = false;
+						scope.agentControl.permissionMenuOpen = false;
+						scope.agentControl.configMenuOpen = false;
+						scope.agentControl.installCandidate = null;
+						scope.agentControl.authCandidate = null;
+						scope.agentControl.permissionModeCandidate = null;
+						return changed;
+					}
+
+					function isMarkedAgentControlSurface(candidate) {
+						return !!(candidate && candidate.getAttribute &&
+							candidate.getAttribute('data-agent-control-surface') !== null);
+					}
+
+					function isAgentControlSurface(event) {
+						var target = event && event.target;
+						var path = event && typeof event.composedPath === 'function' ? event.composedPath() : [];
+						for (var index = 0; index < path.length; index += 1) {
+							var pathElement = path[index];
+							if (pathElement === controlBarElement || isMarkedAgentControlSurface(pathElement)) {
+								return true;
+							}
+						}
+						if (!target) return false;
+						if (controlBarElement && controlBarElement.contains && controlBarElement.contains(target)) {
+							return true;
+						}
+						var candidate = target.nodeType === 1 ? target : target.parentNode;
+						while (candidate && candidate !== document) {
+							if (candidate === controlBarElement || isMarkedAgentControlSurface(candidate)) {
+								return true;
+							}
+							candidate = candidate.parentNode;
+						}
+						return false;
+					}
+
+					function handleDocumentClick(event) {
+						if (isAgentControlSurface(event)) return;
+						var changed = closeTransientSurfaces();
+						if (!scope.agentControl.collapsed) {
+							scope.agentControl.collapsed = true;
+							changed = true;
+						}
+						if (changed && scope.$evalAsync) scope.$evalAsync(function() {});
+					}
+
+					if (document.addEventListener) {
+						document.addEventListener('click', handleDocumentClick);
+					}
 
 				function statusLabel(provider) {
 					return agentSessionI18n.t(provider.installState || 'unavailable');
@@ -213,12 +274,39 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 					return mode ? mode.label : agentSessionI18n.t('toolPermissions');
 				};
 
-				scope.toggleCollapse = function() {
-					scope.agentControl.providerMenuOpen = false;
-					scope.agentControl.permissionMenuOpen = false;
-					scope.agentControl.configMenuOpen = false;
-					scope.agentControl.collapsed = !scope.agentControl.collapsed;
+				function activeSessionProviderId() {
+					return scope.agentControl.session && scope.agentControl.session.session &&
+						scope.agentControl.session.session.provider;
+				}
+
+				function usesSelectedSessionProvider() {
+					var providerId = activeSessionProviderId();
+					return !providerId || providerId === scope.agentControl.providerId;
+				}
+
+				scope.permissionModeDescription = function(mode) {
+					if (!mode) return '';
+					var semantics = mode.semantics || {};
+					if (semantics.workspaceAccess === 'read-only') {
+						return agentSessionI18n.t('permissionReadOnlyDescription');
+					}
+					if (semantics.workspaceAccess === 'full-access') {
+						return agentSessionI18n.t('permissionFullAccessDescription');
+					}
+					if (semantics.approvals === 'provider-reviewed') {
+						return agentSessionI18n.t('permissionAutoReviewDescription');
+					}
+					if (semantics.approvals === 'interactive') {
+						return agentSessionI18n.t('permissionAskDescription');
+					}
+					var description = String(mode.description || '').trim().replace(/^:+/, '');
+					return description.length > 56 ? description.slice(0, 55) + '…' : description;
 				};
+
+					scope.toggleCollapse = function() {
+						closeTransientSurfaces();
+						scope.agentControl.collapsed = !scope.agentControl.collapsed;
+					};
 
 				scope.toggleProviderMenu = function() {
 					scope.agentControl.permissionMenuOpen = false;
@@ -419,7 +507,9 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 
 				function submissionPayload(kind) {
 					var payload = {
-						providerId: scope.agentControl.providerId,
+						providerId: kind === 'append'
+							? activeSessionProviderId() || scope.agentControl.providerId
+							: scope.agentControl.providerId,
 						modelId: scope.agentControl.modelId,
 						effort: scope.agentControl.effort,
 						permissionModeId: scope.agentControl.permissionModeId,
@@ -608,7 +698,7 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 				scope.canAppendAgentSession = function() {
 					return !!(!scope.agentControl.busy && !scope.agentControl.document.dirty &&
 						!scope.agentControl.document.conflict && scope.agentControl.session &&
-						!scope.agentControl.session.activeTurnId && scope.agentControl.modelId &&
+						!scope.agentControl.session.activeTurnId && usesSelectedSessionProvider() && scope.agentControl.modelId &&
 						scope.agentControl.permissionModeId);
 				};
 
@@ -653,7 +743,7 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 					if (scope.agentControl.session && scope.agentControl.session.activeTurnId) {
 						return 'interrupt';
 					}
-					if (scope.agentControl.session) {
+					if (scope.agentControl.session && usesSelectedSessionProvider()) {
 						return 'append';
 					}
 					return 'send';
@@ -688,28 +778,55 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 					return agentSessionI18n.t('send');
 				};
 
-				scope.handleComposerKeydown = function(event) {
-					if (!event || event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
-					event.preventDefault();
-					if (scope.canPerformPrimaryAction()) scope.handlePrimaryAction();
-				};
+					scope.handleComposerKeydown = function(event) {
+						if (!event || event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+						event.preventDefault();
+						if (scope.canPerformPrimaryAction()) scope.handlePrimaryAction();
+					};
+
+					function sessionEventStatus(payload) {
+						return payload && (payload.status || payload.turn && payload.turn.status);
+					}
+
+					function sessionEventError(payload) {
+						var error = payload && (payload.error || payload.turn && payload.turn.error);
+						if (!error) return '';
+						if (typeof error === 'string') return error;
+						return error.message || error.code || String(error);
+					}
+
+					function applyRuntimeFailure(status, payload) {
+						if (status !== 'failed' && status !== 'disconnected' && status !== 'conflict') return;
+						var message = sessionEventError(payload);
+						if (message || !scope.agentControl.error) {
+							scope.agentControl.error = message || agentSessionI18n.t('failedState');
+						}
+					}
 
 				scope.$on('agent-session-snapshot', function(_event, value) {
 					applySnapshot(value);
 				});
-				scope.$on('agent-session-event', function(_event, value) {
-					if (!scope.agentControl.session || value.executionId !== scope.agentControl.session.executionId) return;
-					if (value.type === 'session.input.required' && value.payload && value.payload.requestId) {
-						scope.agentControl.inputRequest = Object.assign({ value: '', resolving: false }, value.payload);
-					}
-					if (value.type === 'session.state.changed' && value.payload && value.payload.status) {
-						scope.agentControl.session.status = value.payload.status;
-						scope.agentControl.session.activeTurnId = value.payload.activeTurnId;
-					}
-					if (value.type === 'session.completed') {
-						scope.agentControl.session.activeTurnId = null;
-						scope.agentControl.session.status = 'idle';
-					}
+					scope.$on('agent-session-event', function(_event, value) {
+						if (!scope.agentControl.session || value.executionId !== scope.agentControl.session.executionId) return;
+						if (value.type === 'session.input.required' && value.payload && value.payload.requestId) {
+							scope.agentControl.inputRequest = Object.assign({ value: '', resolving: false }, value.payload);
+						}
+						if (value.type === 'session.state.changed' && value.payload) {
+							var status = sessionEventStatus(value.payload);
+							if (status) scope.agentControl.session.status = status;
+							if (Object.prototype.hasOwnProperty.call(value.payload, 'activeTurnId')) {
+								scope.agentControl.session.activeTurnId = value.payload.activeTurnId;
+							}
+							applyRuntimeFailure(status, value.payload);
+						}
+						if (value.type === 'session.completed') {
+							var completedStatus = sessionEventStatus(value.payload) || scope.agentControl.session.status;
+							scope.agentControl.session.activeTurnId = null;
+							scope.agentControl.session.status = completedStatus === 'failed' || completedStatus === 'interrupted'
+								? completedStatus
+								: 'idle';
+							applyRuntimeFailure(completedStatus, value.payload);
+						}
 				});
 				scope.$on('agent-provider-install-progress', function(_event, value) {
 					var installation = scope.agentControl.installation;
@@ -729,10 +846,13 @@ angular.module('kityminderEditor').directive('agentControlBar', [
 						scope.agentControl.error = agentSessionI18n.t('mcpReconnectedRetry');
 					}
 				});
-				scope.$on('$destroy', function() {
-					agentActionSequence += 1;
-					clearAgentActionTimeout();
-				});
+					scope.$on('$destroy', function() {
+						agentActionSequence += 1;
+						clearAgentActionTimeout();
+						if (document.removeEventListener) {
+							document.removeEventListener('click', handleDocumentClick);
+						}
+					});
 
 				applySnapshot(agentSessionService.getSnapshot());
 				complete(agentSessionService.discoverProviders(), applySnapshot);

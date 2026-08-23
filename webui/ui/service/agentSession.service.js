@@ -51,6 +51,7 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 
 			function eventText(message) {
 				var payload = message.payload || {};
+				var error = eventError(payload);
 				if (message.type === 'session.delta') {
 					if (payload.delta && payload.delta.text) return payload.delta.text;
 					return payload.outputDelta || '';
@@ -65,10 +66,19 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 					return payload.prompt || payload.description || 'Input required';
 				}
 				if (message.type === 'session.state.changed') {
-					return payload.status || '';
+					return error || payload.status || '';
 				}
-				if (message.type === 'session.completed') return 'completed';
+				if (message.type === 'session.completed') {
+					return error || payload.status || payload.turn && payload.turn.status || 'completed';
+				}
 				return '';
+			}
+
+			function eventError(payload) {
+				var error = payload && (payload.error || payload.turn && payload.turn.error);
+				if (!error) return '';
+				if (typeof error === 'string') return error;
+				return error.message || error.code || String(error);
 			}
 
 			function rememberLiveEvent(message) {
@@ -87,8 +97,20 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 					detail.activeTurnId = payload.activeTurnId;
 				}
 				if (message.type === 'session.completed') {
-					detail.status = 'completed';
+					var completedStatus = payload.status || payload.turn && payload.turn.status;
+					detail.status = completedStatus === 'failed' || completedStatus === 'interrupted'
+						? completedStatus
+						: 'completed';
 					detail.activeTurnId = null;
+				}
+				var error = eventError(payload);
+				if (error) {
+					detail.error = {
+						code: payload.error && payload.error.code || payload.turn && payload.turn.error && payload.turn.error.code || 'SESSION_FAILED',
+						message: error
+					};
+				} else if (payload.status && payload.status !== 'failed' && payload.status !== 'disconnected' && payload.status !== 'conflict') {
+					detail.error = null;
 				}
 				var text = eventText(message);
 				if (text) {
@@ -198,8 +220,9 @@ angular.module('kityminderEditor').factory('agentSessionService', [
                 sequence:        raw.sequence       != null ? raw.sequence       : 0,
                 updatedAt:       raw.updatedAt      || raw.updated_at            || null,
                 activeTurnId:    raw.activeTurnId   != null ? raw.activeTurnId   : (raw.active_turn_id   != null ? raw.active_turn_id   : null),
-                requestedConfig: raw.requestedConfig || raw.requested_config     || null,
-                effectiveConfig: raw.effectiveConfig || raw.effective_config     || null,
+				requestedConfig: raw.requestedConfig || raw.requested_config     || null,
+				effectiveConfig: raw.effectiveConfig || raw.effective_config     || null,
+				error:           raw.error          || null,
 				nodeId:          raw.nodeId        || raw.node_id        || null,
 				title:           raw.title         || null,
             };

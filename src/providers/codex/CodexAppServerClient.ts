@@ -11,7 +11,6 @@ interface PendingRequest {
 
 export interface CodexAppServerClientOptions {
 	executable: string;
-	experimentalApi?: boolean;
 	requestTimeoutMs?: number;
 	spawnProcess?: typeof spawn;
 }
@@ -76,7 +75,11 @@ export class CodexAppServerClient {
 				title: 'InfiniteMap Codex Provider',
 				version: '1.0.0',
 			},
-			capabilities: this.options.experimentalApi ? { experimentalApi: true } : null,
+			// Permission profiles and their `permissions` request field belong to
+			// the experimental App Server surface. InfiniteMap exposes those
+			// profiles in its control bar, so negotiate the capability before any
+			// profile RPC or thread request is sent.
+			capabilities: { experimentalApi: true },
 		});
 		this.notify('initialized', {});
 		this.initialized = true;

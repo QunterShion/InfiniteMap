@@ -36,7 +36,7 @@
 | TS schema 生成    | `codex app-server generate-ts`      |           ✅ | 官方 CLI               | 强烈建议使用                   |
 | JSON Schema 生成  | `generate-json-schema`              |           ✅ | 官方 CLI               | 强烈建议使用                   |
 
-官方目前明确区分 stable / experimental surface：初始化时不传 `experimentalApi:true`，实验字段和方法会直接被 App Server 拒绝；schema 生成默认也只生成 stable surface。这与你设计里的 `experimentalCodexApi=false` 完全一致。 ([developers.openai.com][1])
+官方明确区分 stable / experimental surface：初始化时不传 `experimentalApi:true`，`permissionProfile/list`、`thread/start.permissions` 等实验能力会被 App Server 拒绝；schema 生成默认也只生成 stable surface。InfiniteMap 已使用权限 Profile，因此握手必须固定声明该 capability，并以 `generate-json-schema --experimental` 生成同一协议表面的 Schema。 ([developers.openai.com][1])
 
 ---
 
@@ -86,6 +86,8 @@ thread/start
 ```
 
 没有问题。
+
+新建线程返回后不得为了补充配置立即调用 `thread/resume`：此时首个 Turn 可能尚未生成 rollout，会触发 `no rollout found for thread id`。创建期上下文应随 `thread/start.developerInstructions` 注入，完整 Provider trace 随首个及后续 `turn/start.additionalContext` 注入；`thread/resume` 只用于继续已经持久化的旧会话。
 
 ---
 

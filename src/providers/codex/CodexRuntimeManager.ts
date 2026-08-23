@@ -21,7 +21,6 @@ export interface CodexRuntimeProbe {
 
 export interface CodexRuntimeManagerOptions {
 	explicitExecutable?: string;
-	experimentalApi?: boolean;
 	storagePath: string;
 	environmentPath?: string;
 }
@@ -79,13 +78,12 @@ export class CodexRuntimeManager {
 			mtimeMs: stat.mtimeMs,
 			size: stat.size,
 			binaryHash,
-			experimentalApi: this.options.experimentalApi === true,
+			experimentalApi: true,
 		})).digest('hex');
 		await this.ensureSchemas(executable, fingerprint);
 
 		const client = new CodexAppServerClient({
 			executable,
-			experimentalApi: this.options.experimentalApi,
 		});
 		try {
 			await client.start();
@@ -168,7 +166,7 @@ export class CodexRuntimeManager {
 		}
 		const temporary = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'infinite-map-codex-schema-'));
 		try {
-			await execFileAsync(executable, ['app-server', 'generate-json-schema', '--out', temporary], {
+			await execFileAsync(executable, ['app-server', 'generate-json-schema', '--experimental', '--out', temporary], {
 				timeout: 60_000,
 				maxBuffer: 8 * 1024 * 1024,
 			});

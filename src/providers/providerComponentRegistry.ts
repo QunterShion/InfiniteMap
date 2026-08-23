@@ -40,7 +40,6 @@ export interface ProviderComponentRegistryOptions {
 	storagePath: string;
 	secretStorage?: vscode.SecretStorage;
 	explicitCodexExecutable?: string;
-	experimentalCodexApi?: boolean;
 	installer?: Installer;
 	installers?: Partial<Record<ProviderId, Installer>>;
 	componentFactory?: () => ProviderComponentApiV1;
@@ -227,7 +226,6 @@ export class ProviderComponentRegistry implements vscode.Disposable {
 		const runtimeFactory = this.options.runtimeFactory || ((executable: string, storagePath: string) =>
 			new CodexRuntimeManager({
 				explicitExecutable: executable,
-				experimentalApi: this.options.experimentalCodexApi,
 				storagePath: path.join(storagePath, 'codex-state'),
 			})
 		);

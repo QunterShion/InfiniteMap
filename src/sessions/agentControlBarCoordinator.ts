@@ -33,7 +33,6 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 			storagePath: context.globalStorageUri?.fsPath || path.join(context.extensionPath, '.infinite-map-storage'),
 			secretStorage: context.secrets,
 			explicitCodexExecutable: configuration?.get<string>('executable', '') || '',
-			experimentalCodexApi: configuration?.get<boolean>('experimentalApi', false) || false,
 		});
 		this.orchestrator = new SessionOrchestrator(this.providers);
 		this.eventSubscription = this.orchestrator.onDidEvent((event) => {

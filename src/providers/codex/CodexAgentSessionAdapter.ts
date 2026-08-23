@@ -76,6 +76,12 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 	private readonly submissions = new Map<string, SubmissionState>();
 	private readonly eventIds = new Set<string>();
 	private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
+	private readonly permissionProfileIds = new Map<string, string>([
+		['codex:ask', ':workspace'],
+		['codex:approve-for-me', ':workspace'],
+		['codex:read-only', ':read-only'],
+		['codex:full-access', ':full-access'],
+	]);
 	private probe: CodexRuntimeProbe | undefined;
 	private removeNotificationListener: (() => void) | undefined;
 	private removeDisconnectListener: (() => void) | undefined;
@@ -167,6 +173,8 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		this.assertModel(probe.models, input.modelId, input.effort);
 		const permissionMode = await this.resolvePermissionMode(input.permissionModeId, input.workingDirectory);
 		const permissionConfig = this.codexPermissionConfig(permissionMode.id);
+		const traceOpenUri = input.traceOpenUri
+			|| `vscode://chanterxiao.infinite-map/session/open?v=1&executionId=${encodeURIComponent(input.executionId)}`;
 		const response = await probe.client.request<{
 			thread: CodexThread;
 			model: string;
@@ -175,7 +183,18 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			model: input.modelId,
 			cwd: input.workingDirectory,
 			...permissionConfig,
-			developerInstructions: CODEX_CONTROL_INSTRUCTIONS,
+			developerInstructions: [
+				CODEX_CONTROL_INSTRUCTIONS,
+				'Provider trace seed (protocolVersion 1):',
+				JSON.stringify({
+					executionId: input.executionId,
+					openUri: traceOpenUri,
+					provider: PROVIDER_ID,
+					protocolVersion: 1,
+					surface: 'app-server',
+				}),
+				'The complete Provider session trace is supplied as application context on each turn.',
+			].join('\n'),
 			config: {
 				mcp_servers: {
 					infiniteMap: {
@@ -196,27 +215,8 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			modelId: response.model || input.modelId,
 			effort: response.reasoningEffort || input.effort,
 			permissionModeId: permissionMode.id,
-			openUri: input.traceOpenUri || `vscode://chanterxiao.infinite-map/session/open?v=1&executionId=${encodeURIComponent(input.executionId)}`,
+			openUri: traceOpenUri,
 		};
-		await probe.client.request('thread/resume', {
-			threadId: response.thread.id,
-				model: input.modelId,
-				cwd: input.workingDirectory,
-				...permissionConfig,
-			developerInstructions: [
-				CODEX_CONTROL_INSTRUCTIONS,
-				'Provider trace context (protocolVersion 1):',
-				JSON.stringify({ executionId: input.executionId, session, protocolVersion: 1 }),
-			].join('\n'),
-			config: {
-				mcp_servers: {
-					infiniteMap: {
-						command: input.mcpServer.command,
-						args: input.mcpServer.args,
-					},
-				},
-			},
-		});
 		this.sessions.set(session.sessionId, {
 			executionId: input.executionId,
 			session,
@@ -265,6 +265,16 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				threadId: input.session.sessionId,
 				clientUserMessageId: submissionId,
 				input: [{ type: 'text', text: input.message, text_elements: [] }],
+				additionalContext: {
+					'infinite-map/provider-trace-v1': {
+						kind: 'application',
+						value: JSON.stringify({
+							executionId: state.executionId,
+							protocolVersion: 1,
+							session: state.session,
+						}),
+					},
+				},
 				model: input.modelId,
 					effort: input.effort || null,
 					...permissionConfig,
@@ -281,7 +291,12 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			this.updateState(state, 'running');
 			return { submissionId, turnId: response.turn.id };
 		} catch (error) {
-			await this.reconcileSubmission(input.session.sessionId, submissionId);
+			try {
+				await this.reconcileSubmission(input.session.sessionId, submissionId);
+			} catch {
+				// Reconciliation is best-effort. A fresh thread may not have a rollout
+				// yet, so its read failure must never replace the original turn error.
+			}
 			const reconciled = this.submissions.get(submissionId);
 			if (reconciled?.acceptedTurnId) {
 				return { submissionId, turnId: reconciled.acceptedTurnId };
@@ -678,7 +693,12 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 	private updateState(state: SessionState, status: SessionSnapshot['status'], payload?: unknown): void {
 		state.status = status;
 		state.updatedAt = new Date().toISOString();
-		this.emit(state, 'session.state.changed', payload || this.snapshot(state));
+		const snapshot = this.snapshot(state);
+		this.emit(
+			state,
+			'session.state.changed',
+			payload && typeof payload === 'object' ? { ...snapshot, ...payload } : snapshot
+		);
 	}
 
 	private emit(state: SessionState, type: AgentSessionEventPayload['type'], payload: unknown): void {
@@ -716,61 +736,70 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		} | null
 	): ProviderPermissionModeOption[] {
 		const modes: ProviderPermissionModeOption[] = [];
+		const addMode = (mode: ProviderPermissionModeOption): void => {
+			if (!modes.some((candidate) => candidate.id === mode.id)) {
+				modes.push(mode);
+			}
+		};
 		const allowsPolicy = (policy: string): boolean => !requirements?.allowedApprovalPolicies
 			|| requirements.allowedApprovalPolicies.includes(policy);
 		const allowsReviewer = (reviewer: string): boolean => !requirements?.allowedApprovalsReviewers
 			|| requirements.allowedApprovalsReviewers.includes(reviewer);
 		for (const profile of profiles) {
-			if (profile.id === ':workspace') {
+			if (profile.id === ':workspace' || profile.id === ':workspace-write') {
+				this.permissionProfileIds.set('codex:ask', profile.id);
+				this.permissionProfileIds.set('codex:approve-for-me', profile.id);
 				if (allowsPolicy('on-request') && allowsReviewer('user')) {
-					modes.push(this.codexPermissionOption(
+					addMode(this.codexPermissionOption(
 						'codex:ask',
 						'Ask for approval',
 						{ approvals: 'interactive', workspaceAccess: 'workspace-write' },
 						'builtin',
 						'standard',
 						false,
-						profile.description || undefined
+						'Ask before sensitive actions.'
 					));
 				}
 				if (allowsPolicy('on-request') && allowsReviewer('auto_review')) {
-					modes.push(this.codexPermissionOption(
+					addMode(this.codexPermissionOption(
 						'codex:approve-for-me',
 						'Approve for me',
 						{ approvals: 'provider-reviewed', workspaceAccess: 'workspace-write' },
 						'builtin',
 						'standard',
 						false,
-						'Codex reviews eligible approval requests automatically.'
+						'Codex reviews approval requests.'
 					));
 				}
 			} else if (profile.id === ':read-only') {
+				this.permissionProfileIds.set('codex:read-only', profile.id);
 				if (allowsPolicy('on-request') && allowsReviewer('user')) {
-					modes.push(this.codexPermissionOption(
+					addMode(this.codexPermissionOption(
 						'codex:read-only',
 						'Read only',
 						{ approvals: 'interactive', workspaceAccess: 'read-only' },
 						'builtin',
 						'restricted',
 						false,
-						profile.description || undefined
+						'View files only.'
 					));
 				}
-			} else if (profile.id === ':full-access') {
+			} else if (profile.id === ':full-access' || profile.id === ':danger-full-access') {
+				this.permissionProfileIds.set('codex:full-access', profile.id);
 				if (allowsPolicy('never') && allowsReviewer('user')) {
-					modes.push(this.codexPermissionOption(
+					addMode(this.codexPermissionOption(
 						'codex:full-access',
 						'Full access',
 						{ approvals: 'non-interactive', workspaceAccess: 'full-access' },
 						'builtin',
 						'elevated',
 						false,
-						profile.description || undefined,
+						'Use all tools without approval.',
 						true
 					));
 				}
 			} else if (allowsPolicy('on-request') && allowsReviewer('user')) {
-				modes.push(this.codexPermissionOption(
+				addMode(this.codexPermissionOption(
 					`codex:profile:${encodeURIComponent(profile.id)}`,
 					profile.id,
 					{ approvals: 'profile-defined', workspaceAccess: 'profile-defined' },
@@ -783,11 +812,11 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		}
 
 		const configuredDefault = requirements?.defaultPermissions;
-		const defaultId = configuredDefault === ':workspace'
+		const defaultId = configuredDefault === ':workspace' || configuredDefault === ':workspace-write'
 			? 'codex:ask'
 			: configuredDefault === ':read-only'
 				? 'codex:read-only'
-				: configuredDefault === ':full-access'
+				: configuredDefault === ':full-access' || configuredDefault === ':danger-full-access'
 					? 'codex:full-access'
 					: configuredDefault
 						? `codex:profile:${encodeURIComponent(configuredDefault)}`
@@ -851,13 +880,13 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 	} {
 		switch (permissionModeId) {
 			case 'codex:ask':
-				return { permissions: ':workspace', approvalPolicy: 'on-request', approvalsReviewer: 'user' };
+				return { permissions: this.permissionProfileIds.get(permissionModeId) || ':workspace', approvalPolicy: 'on-request', approvalsReviewer: 'user' };
 			case 'codex:approve-for-me':
-				return { permissions: ':workspace', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' };
+				return { permissions: this.permissionProfileIds.get(permissionModeId) || ':workspace', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' };
 			case 'codex:read-only':
-				return { permissions: ':read-only', approvalPolicy: 'on-request', approvalsReviewer: 'user' };
+				return { permissions: this.permissionProfileIds.get(permissionModeId) || ':read-only', approvalPolicy: 'on-request', approvalsReviewer: 'user' };
 			case 'codex:full-access':
-				return { permissions: ':full-access', approvalPolicy: 'never', approvalsReviewer: 'user' };
+				return { permissions: this.permissionProfileIds.get(permissionModeId) || ':full-access', approvalPolicy: 'never', approvalsReviewer: 'user' };
 			default:
 				if (permissionModeId.startsWith('codex:profile:')) {
 					return {

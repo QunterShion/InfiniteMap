@@ -12,10 +12,13 @@ test('agent controls live only in the bottom control bar', () => {
     'utf8'
   );
   const card = fs.readFileSync(path.join(root, 'webui/ui/directive/nodeCard/nodeCard.html'), 'utf8');
-  assert.match(control, /data-component="agent-control-bar"/);
+	assert.match(control, /data-component="agent-control-bar"/);
+	assert.match(control, /data-component="agent-control-bar" data-agent-control-surface/);
 	for (const slot of ['composer-shell', 'provider-trigger', 'provider-menu', 'permission-trigger', 'permission-menu', 'config-trigger', 'config-menu', 'instruction-input', 'primary-action-button', 'collapsed-primary-action', 'agent-action-feedback', 'retry-agent-action', 'toggle-collapse-button', 'collapsed-status']) {
 		assert.match(control, new RegExp(slot));
 	}
+	assert.match(control, /permissionModeDescription\(mode\)/);
+	assert.equal((control.match(/data-survives-collapse/g) || []).length, 2);
 	assert.match(control, /collapsed-primary-action[\s\S]*?ng-click="handlePrimaryAction\(\)"/);
 	assert.match(control, /collapsed-primary-action[\s\S]*?data-action-state="\{\{ getPrimaryActionState\(\) \}\}"/);
 	assert.doesNotMatch(control, /activity-button|openAgentActivity/);
@@ -182,8 +185,10 @@ test('primary action and collapse controls follow the current session state', ()
         { id: 'medium', label: '中' }, { id: 'high', label: '高' }
       ] }],
       permissionModes: [
-        { id: 'codex:ask', label: 'Ask for approval', support: 'native', risk: 'standard', isDefault: true },
-        { id: 'codex:full-access', label: 'Full access', support: 'native', risk: 'elevated', requiresConfirmation: true }
+        { id: 'codex:ask', label: 'Ask for approval', support: 'native', risk: 'standard', isDefault: true,
+          semantics: { approvals: 'interactive', workspaceAccess: 'workspace-write' } },
+        { id: 'codex:full-access', label: 'Full access', support: 'native', risk: 'elevated', requiresConfirmation: true,
+          semantics: { approvals: 'non-interactive', workspaceAccess: 'full-access' } }
       ]
     },
     {
@@ -199,6 +204,8 @@ test('primary action and collapse controls follow the current session state', ()
   assert.equal(scope.selectedProviderLabel(), 'Codex');
   assert.equal(scope.configurationLabel(), 'GPT-5.6 Codex · 高');
   assert.equal(scope.selectedPermissionModeLabel(), 'Ask for approval');
+  assert.equal(scope.permissionModeDescription(providers[0].permissionModes[0]), 'permissionAskDescription');
+  assert.equal(scope.permissionModeDescription(providers[0].permissionModes[1]), 'permissionFullAccessDescription');
   scope.togglePermissionMenu();
   assert.equal(scope.agentControl.permissionMenuOpen, true);
   scope.selectPermissionFromMenu(providers[0].permissionModes[1]);
@@ -241,17 +248,28 @@ test('primary action and collapse controls follow the current session state', ()
   assert.equal(scope.canPerformPrimaryAction(), true);
   scope.handlePrimaryAction();
 
-  scope.agentControl.session = { activeTurnId: null };
+  scope.agentControl.session = { activeTurnId: null, session: { provider: 'codex' } };
   assert.equal(scope.getPrimaryActionState(), 'append');
   assert.equal(scope.canPerformPrimaryAction(), true);
   scope.handlePrimaryAction();
+
+	// Switching Provider on an idle session starts a new session instead of
+	// sending an invalid append request to the previous Provider.
+	scope.agentControl.providerId = 'claudecode';
+	scope.agentControl.modelId = 'claude-opus-4-1';
+	scope.agentControl.permissionModeId = 'claude:default';
+	assert.equal(scope.getPrimaryActionState(), 'send');
+	assert.equal(scope.canAppendAgentSession(), false);
+	assert.equal(scope.canPerformPrimaryAction(), true);
+	scope.handlePrimaryAction();
+	scope.agentControl.providerId = 'codex';
 
   scope.agentControl.session.activeTurnId = 'turn-1';
   assert.equal(scope.getPrimaryActionState(), 'interrupt');
   assert.equal(scope.canPerformPrimaryAction(), true);
   scope.handlePrimaryAction();
 
-  assert.deepEqual(calls, ['send', 'append', 'interrupt']);
+  assert.deepEqual(calls, ['send', 'append', 'send', 'interrupt']);
 });
 
 test('agent actions provide immediate feedback, suppress duplicates, and recover with the same idempotency key', () => {
@@ -347,7 +365,7 @@ test('agent actions provide immediate feedback, suppress duplicates, and recover
   scope.retryAgentAction();
   assert.equal(sendCalls.length, 2);
   assert.equal(sendCalls[1].payload.idempotencyKey, sendCalls[0].payload.idempotencyKey);
-  sendCalls[1].resolve({ session: { executionId: 'execution-1', activeTurnId: 'turn-1' } });
+  sendCalls[1].resolve({ session: { executionId: 'execution-1', activeTurnId: 'turn-1', session: { provider: 'codex' } } });
   assert.equal(scope.agentControl.action.phase, 'idle');
   assert.equal(scope.agentControl.input, '');
   assert.equal(scope.getPrimaryActionState(), 'interrupt');
@@ -361,11 +379,12 @@ test('agent actions provide immediate feedback, suppress duplicates, and recover
   assert.equal(scope.primaryActionLabel(), 'interrupting');
   scope.handlePrimaryAction();
   assert.equal(interruptCalls.length, 1, 'interrupt is also single-flight');
-  interruptCalls[0].resolve({ session: { executionId: 'execution-1', activeTurnId: null } });
+  interruptCalls[0].resolve({ session: { executionId: 'execution-1', activeTurnId: null, session: { provider: 'codex' } } });
 
   scope.agentControl.input = 'Follow up';
   scope.handlePrimaryAction();
   assert.equal(appendCalls.length, 1);
+	assert.equal(appendCalls[0].payload.providerId, 'codex');
   assert.equal(scope.agentControl.action.phase, 'sending');
   assert.equal(scope.primaryActionLabel(), 'sending');
   appendCalls[0].reject(new Error('Provider unavailable'));
@@ -375,6 +394,130 @@ test('agent actions provide immediate feedback, suppress duplicates, and recover
   scope.retryAgentAction();
   assert.equal(appendCalls.length, 2);
   assert.equal(appendCalls[1].payload.idempotencyKey, appendCalls[0].payload.idempotencyKey);
+});
+
+test('outside clicks collapse the bar, dismiss transient menus, and preserve collapsed runtime interactions', () => {
+  let directiveFactory;
+  const moduleApi = {
+    directive(name, definition) {
+      if (name === 'agentControlBar') directiveFactory = definition.at(-1);
+      return moduleApi;
+    }
+  };
+  const documentListeners = new Map();
+  const fakeDocument = {
+    addEventListener(name, listener) { documentListeners.set(name, listener); },
+    removeEventListener(name, listener) {
+      if (documentListeners.get(name) === listener) documentListeners.delete(name);
+    },
+    dispatchEvent() {}
+  };
+  vm.runInNewContext(
+    fs.readFileSync(path.join(root, 'webui/ui/directive/agentControlBar/agentControlBar.directive.js'), 'utf8'),
+    {
+      angular: { module: () => moduleApi },
+      CustomEvent: function CustomEvent() {},
+      document: fakeDocument,
+      window: {}
+    }
+  );
+  const resolved = (value) => ({ then: (success) => success(value) });
+  const resolvedInputs = [];
+  const sessionService = {
+    getSnapshot: () => ({ providers: [], session: null, document: { dirty: false, conflict: false } }),
+    discoverProviders: () => resolved({ providers: [], session: null, document: { dirty: false, conflict: false } }),
+    normalizeSession: (value) => value,
+    resolveInput(requestId, decision, value) {
+      resolvedInputs.push({ requestId, decision, value });
+      return resolved();
+    }
+  };
+  const scopeListeners = new Map();
+  const scope = {
+    $evalAsync(callback) { callback(); },
+    $on(name, listener) {
+      if (!scopeListeners.has(name)) scopeListeners.set(name, []);
+      scopeListeners.get(name).push(listener);
+    }
+  };
+  const rootElement = {
+    contains(target) { return target && target.insideControlBar === true; }
+  };
+  directiveFactory(sessionService, { t: (key) => key }).link(scope, [rootElement]);
+
+  scope.agentControl.providerMenuOpen = true;
+  scope.agentControl.permissionMenuOpen = true;
+  documentListeners.get('click')({
+    target: { nodeType: 1, getAttribute: () => null, parentNode: fakeDocument }
+  });
+  assert.equal(scope.agentControl.collapsed, true);
+  assert.equal(scope.agentControl.providerMenuOpen, false);
+  assert.equal(scope.agentControl.permissionMenuOpen, false);
+
+  scope.agentControl.collapsed = false;
+  scope.agentControl.configMenuOpen = true;
+  const derivedSurface = {
+    nodeType: 1,
+    getAttribute(name) { return name === 'data-agent-control-surface' ? '' : null; },
+    parentNode: fakeDocument
+  };
+  documentListeners.get('click')({ target: derivedSurface });
+  assert.equal(scope.agentControl.collapsed, false);
+  assert.equal(scope.agentControl.configMenuOpen, true);
+
+	// Angular can remove a clicked menu item before the event reaches document.
+	// The original propagation path still identifies it as a control-bar action.
+	scope.agentControl.configMenuOpen = false;
+	const detachedMenuAction = {
+		nodeType: 1,
+		getAttribute: () => null,
+		parentNode: null
+	};
+	documentListeners.get('click')({
+		target: detachedMenuAction,
+		composedPath: () => [detachedMenuAction, rootElement, fakeDocument]
+	});
+	assert.equal(scope.agentControl.collapsed, false);
+
+  scope.agentControl.collapsed = true;
+  scope.agentControl.session = {
+    executionId: 'execution-collapsed',
+    status: 'running',
+    activeTurnId: 'turn-1',
+    session: { provider: 'codex' }
+  };
+  const emitSessionEvent = (value) => {
+    for (const listener of scopeListeners.get('agent-session-event') || []) listener({}, value);
+  };
+  emitSessionEvent({
+    executionId: 'execution-collapsed',
+    type: 'session.input.required',
+    payload: { requestId: 'approval-1', title: 'Run command', description: 'npm test' }
+  });
+  assert.equal(scope.agentControl.inputRequest.requestId, 'approval-1');
+  assert.equal(scope.agentControl.collapsed, true);
+  scope.resolveAgentInput('approve');
+  assert.deepEqual(resolvedInputs, [{ requestId: 'approval-1', decision: 'approve', value: '' }]);
+  assert.equal(scope.agentControl.inputRequest, null);
+
+  emitSessionEvent({
+    executionId: 'execution-collapsed',
+    type: 'session.state.changed',
+    payload: { status: 'failed', activeTurnId: null, error: 'Runtime failed' }
+  });
+  assert.equal(scope.agentControl.error, 'Runtime failed');
+  assert.equal(scope.agentControl.session.status, 'failed');
+  emitSessionEvent({
+    executionId: 'execution-collapsed',
+    type: 'session.completed',
+    payload: { status: 'failed' }
+  });
+  assert.equal(scope.agentControl.session.status, 'failed');
+	assert.equal(scope.agentControl.error, 'Runtime failed');
+  assert.equal(scope.agentControl.collapsed, true);
+
+  for (const listener of scopeListeners.get('$destroy') || []) listener();
+  assert.equal(documentListeners.has('click'), false);
 });
 
 test('agent-session UI uses semantic tokens and ships the 21-language union', () => {
@@ -389,6 +532,12 @@ test('agent-session UI uses semantic tokens and ships the 21-language union', ()
 	for (const slot of ['composer-shell', 'instruction-input', 'provider-trigger', 'permission-trigger', 'config-trigger', 'menu-item', 'primary-action-button']) {
 		assert.match(composerStyles, new RegExp(`data-slot(?:~)?=["']${slot}["']`));
 	}
+	assert.match(composerStyles, /\[data-slot="permission-description"\][\s\S]*?text-overflow: ellipsis;[\s\S]*?white-space: nowrap;/);
+	assert.match(composerStyles, /\[data-slot~="menu-item"\][\s\S]*?height: auto;/);
+	assert.match(composerStyles, /&\.is-collapsed \[data-slot="status"\][\s\S]*?max-width:/);
+	assert.match(composerStyles, /&\.is-collapsed \[data-component="agent-input-dialog"\][\s\S]*?transform: translateX\(-50%\)/);
+	assert.match(composerStyles, /\[data-slot="status"\],[\s\S]*?animation-name: agent-session-fade-in;/);
+	assert.match(composerStyles, /@keyframes agent-session-fade-in[\s\S]*?opacity: 0;[\s\S]*?opacity: 1;/);
 	assert.match(styles, /@container \(max-width: 100ch\)[\s\S]*?bottom: ~"calc\(var\(--spacing\) \* 80\)";[\s\S]*?\.node-card \{ bottom: ~"calc\(var\(--spacing\) \* 108\)"; \}/);
 	assert.match(styles, /\[data-component="agent-session-history"\][\s\S]*?bottom: auto;/);
 	assert.match(styles, /\[data-component="agent-activity-overview"\][\s\S]*?bottom: auto;/);

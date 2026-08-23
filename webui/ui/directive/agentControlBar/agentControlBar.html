@@ -1,4 +1,4 @@
-<section data-component="agent-control-bar"
+<section data-component="agent-control-bar" data-agent-control-surface
          ng-class="{'is-busy': agentControl.busy, 'has-error': agentControl.error, 'is-collapsed': agentControl.collapsed}"
          aria-label="{{ 'instruction' | agentSessionText }}">
     <button data-slot="button toggle-collapse-button" type="button"
@@ -133,7 +133,8 @@
                     role="menuitemradio" aria-checked="{{ mode.id === agentControl.permissionModeId }}">
                 <span data-slot="permission-mode-copy">
                     <span data-slot="menu-item-label">{{ mode.label }}</span>
-                    <span data-slot="permission-description" ng-if="mode.description">{{ mode.description }}</span>
+                    <span data-slot="permission-description" ng-if="permissionModeDescription(mode)"
+						ng-attr-title="{{ permissionModeDescription(mode) }}">{{ permissionModeDescription(mode) }}</span>
                 </span>
                 <span data-slot="permission-risk" data-risk="{{ mode.risk }}" ng-if="mode.risk === 'elevated'">
                     {{ 'elevatedRisk' | agentSessionText }}
@@ -169,20 +170,7 @@
             </div>
         </div>
 
-    <div data-slot="status" role="status" aria-live="polite"
-         ng-if="agentControl.error || agentControl.document.dirty || agentControl.document.conflict"
-         ng-class="{'status-error': agentControl.error, 'status-warning': !agentControl.error}">
-        <strong ng-if="agentControl.error">{{ 'error' | agentSessionText }}:</strong>
-        {{ agentControl.error || ('dirty' | agentSessionText) }}
-        <button data-slot="button retry-agent-action" type="button"
-                ng-if="agentControl.error && canRetryAgentAction()"
-                ng-click="retryAgentAction()">{{ 'retry' | agentSessionText }}</button>
-        <button data-slot="button dismiss-error" type="button"
-                ng-if="agentControl.error"
-                ng-click="agentControl.error = null"
-                aria-label="{{ 'dismiss' | agentSessionText }}">×</button>
-    </div>
-    <div data-component="provider-install-popover" data-slot="popover" ng-if="agentControl.installCandidate">
+	<div data-component="provider-install-popover" data-slot="popover" ng-if="agentControl.installCandidate">
         <div data-slot="popover-title">{{ 'installTitle' | agentSessionText }} · {{ agentControl.installCandidate.displayName }}</div>
         <div data-slot="popover-actions">
             <button data-slot="button install-button" type="button" ng-click="confirmProviderInstall()">{{ 'install' | agentSessionText }}</button>
@@ -236,8 +224,23 @@
 				ng-click="cancelPermissionMode()">{{ 'cancel' | agentSessionText }}</button>
 		</div>
 	</div>
-	<div data-component="agent-input-dialog" data-slot="popover" role="dialog" aria-modal="true"
-		aria-label="{{ 'approvalTitle' | agentSessionText }}" ng-if="agentControl.inputRequest">
+	</div>
+	<div data-slot="status" data-survives-collapse role="status" aria-live="polite"
+	     ng-if="agentControl.error || agentControl.document.dirty || agentControl.document.conflict"
+	     ng-class="{'status-error': agentControl.error, 'status-warning': !agentControl.error}">
+	    <strong ng-if="agentControl.error">{{ 'error' | agentSessionText }}:</strong>
+	    {{ agentControl.error || ('dirty' | agentSessionText) }}
+	    <button data-slot="button retry-agent-action" type="button"
+	            ng-if="agentControl.error && canRetryAgentAction()"
+	            ng-click="retryAgentAction()">{{ 'retry' | agentSessionText }}</button>
+	    <button data-slot="button dismiss-error" type="button"
+	            ng-if="agentControl.error"
+	            ng-click="agentControl.error = null"
+	            aria-label="{{ 'dismiss' | agentSessionText }}">×</button>
+	</div>
+	<div data-component="agent-input-dialog" data-slot="popover" data-survives-collapse
+		role="dialog" aria-modal="true" aria-label="{{ 'approvalTitle' | agentSessionText }}"
+		ng-if="agentControl.inputRequest">
 		<div data-slot="popover-title">{{ agentControl.inputRequest.title || ('approvalTitle' | agentSessionText) }}</div>
 		<div data-slot="popover-description" ng-if="agentControl.inputRequest.description">
 			{{ agentControl.inputRequest.description }}
@@ -253,6 +256,5 @@
 			<button data-slot="button deny-button" type="button" ng-click="resolveAgentInput('deny')"
 				ng-disabled="agentControl.inputRequest.resolving">{{ 'deny' | agentSessionText }}</button>
 		</div>
-	</div>
 	</div>
 </section>

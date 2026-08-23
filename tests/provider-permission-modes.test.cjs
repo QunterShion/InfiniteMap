@@ -55,7 +55,7 @@ test('Codex exposes only policy-allowed profiles and applies the selected profil
           data: [
             { id: ':read-only', description: 'Inspect only', allowed: true },
             { id: ':workspace', description: 'Current workspace', allowed: true },
-            { id: ':full-access', description: 'All local files', allowed: true },
+            { id: ':danger-full-access', description: 'All local files', allowed: true },
             { id: 'team-safe', description: 'Team profile', allowed: true },
             { id: 'blocked-profile', description: 'Blocked', allowed: false }
           ],
@@ -92,6 +92,7 @@ test('Codex exposes only policy-allowed profiles and applies the selected profil
     ['codex:read-only', 'codex:ask', 'codex:full-access', 'codex:profile:team-safe']
   );
   assert.equal(modes.find((mode) => mode.isDefault).id, 'codex:ask');
+	assert.equal(modes.some((mode) => mode.label === ':danger-full-access'), false);
   assert.equal(modes.some((mode) => mode.id === 'codex:approve-for-me'), false);
   assert.equal(modes.some((mode) => mode.id.includes('blocked-profile')), false);
 
@@ -104,7 +105,7 @@ test('Codex exposes only policy-allowed profiles and applies the selected profil
     mcpServer: { command: '/usr/bin/node', args: ['/extension/dist/mcp/server.js'] }
   });
   const threadStart = calls.find((call) => call.method === 'thread/start');
-  assert.equal(threadStart.params.permissions, ':full-access');
+  assert.equal(threadStart.params.permissions, ':danger-full-access');
   assert.equal(threadStart.params.approvalPolicy, 'never');
   assert.equal(threadStart.params.approvalsReviewer, 'user');
   assert.equal(session.permissionModeId, 'codex:full-access');

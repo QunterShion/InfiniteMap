@@ -30,6 +30,11 @@ function harness(payload, expectedHash = createHash('sha256').update(payload).di
       fileName: 'codex-test.bin',
       sha256: expectedHash,
       format: 'executable',
+      codeModeHost: {
+        fileName: 'codex-code-mode-host-test.bin',
+        sha256: expectedHash,
+        format: 'executable',
+      },
     },
     downloadFile: async (url, destination) => {
       downloads.push({ url, destination });
@@ -38,6 +43,10 @@ function harness(payload, expectedHash = createHash('sha256').update(payload).di
     verifyExecutable: async (executable) => {
       verified.push(executable);
       return 'codex-cli test';
+    },
+    verifyCodeModeHost: async (executable) => {
+      verified.push(executable);
+      return 'codex-code-mode-host test';
     },
   });
   return { installer, downloads, verified };
@@ -52,16 +61,20 @@ test('Codex runtime is downloaded, checksum-verified, and installed under Infini
 
   assert.equal(executable, installer.executablePath);
   assert.deepEqual(stages, ['downloading', 'installing']);
-  assert.equal(downloads.length, 1);
-  assert.match(downloads[0].url, new RegExp(`rust-v${CODEX_RUNTIME_VERSION}/codex-test\\.bin$`));
-  assert.equal(verified.length, 1);
-  assert.match(verified[0], /\.install-[^/]+\/codex$/);
+  assert.equal(downloads.length, 2);
+  assert.ok(downloads.some((download) => new RegExp(`rust-v${CODEX_RUNTIME_VERSION}/codex-test\\.bin$`).test(download.url)));
+  assert.ok(downloads.some((download) => new RegExp(`rust-v${CODEX_RUNTIME_VERSION}/codex-code-mode-host-test\\.bin$`).test(download.url)));
+  assert.equal(verified.length, 2);
+  assert.ok(verified.some((executablePath) => /\.install-[^/]+\/codex$/.test(executablePath)));
+  assert.ok(verified.some((executablePath) => /\.install-[^/]+\/codex-code-mode-host$/.test(executablePath)));
   assert.deepEqual(await fs.promises.readFile(executable), payload);
+  assert.deepEqual(await fs.promises.readFile(installer.codeModeHostPath), payload);
   assert.equal(await installer.isInstalled(), true);
 
   const metadata = JSON.parse(await fs.promises.readFile(path.join(path.dirname(executable), 'install.json'), 'utf8'));
   assert.equal(metadata.version, CODEX_RUNTIME_VERSION);
   assert.equal(metadata.asset, 'codex-test.bin');
+  assert.equal(metadata.codeModeHostAsset, 'codex-code-mode-host-test.bin');
 });
 
 test('checksum mismatch aborts installation and leaves no managed executable', async () => {

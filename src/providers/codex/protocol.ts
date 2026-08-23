@@ -44,9 +44,16 @@ export const CODEX_METHODS = {
 	threadStatusChanged: 'thread/status/changed',
 	agentMessageDelta: 'item/agentMessage/delta',
 	commandOutputDelta: 'item/commandExecution/outputDelta',
+	fileChangeOutputDelta: 'item/fileChange/outputDelta',
+	fileChangePatchUpdated: 'item/fileChange/patchUpdated',
+	mcpToolCallProgress: 'item/mcpToolCall/progress',
+	reasoningSummaryTextDelta: 'item/reasoning/summaryTextDelta',
+	reasoningSummaryPartAdded: 'item/reasoning/summaryPartAdded',
+	reasoningTextDelta: 'item/reasoning/textDelta',
 	itemStarted: 'item/started',
 	itemCompleted: 'item/completed',
 	turnDiffUpdated: 'turn/diff/updated',
+	turnPlanUpdated: 'turn/plan/updated',
 	modelRerouted: 'model/rerouted',
 	turnCompleted: 'turn/completed',
 	turnError: 'error',
@@ -84,9 +91,16 @@ export const CODEX_PROTOCOL_SURFACE = {
 		CODEX_METHODS.threadStatusChanged,
 		CODEX_METHODS.agentMessageDelta,
 		CODEX_METHODS.commandOutputDelta,
+		CODEX_METHODS.fileChangeOutputDelta,
+		CODEX_METHODS.fileChangePatchUpdated,
+		CODEX_METHODS.mcpToolCallProgress,
+		CODEX_METHODS.reasoningSummaryTextDelta,
+		CODEX_METHODS.reasoningSummaryPartAdded,
+		CODEX_METHODS.reasoningTextDelta,
 		CODEX_METHODS.itemStarted,
 		CODEX_METHODS.itemCompleted,
 		CODEX_METHODS.turnDiffUpdated,
+		CODEX_METHODS.turnPlanUpdated,
 		CODEX_METHODS.modelRerouted,
 		CODEX_METHODS.turnCompleted,
 		CODEX_METHODS.turnError,
@@ -358,10 +372,20 @@ export interface CodexThread {
 	turns?: CodexTurn[];
 }
 
+export interface CodexThreadItem {
+	id: string;
+	type: string;
+	[key: string]: unknown;
+}
+
 export interface CodexTurn {
 	id: string;
 	status: 'completed' | 'interrupted' | 'failed' | 'inProgress';
 	error?: { message?: string } | null;
+	items?: CodexThreadItem[];
+	startedAt?: number | null;
+	completedAt?: number | null;
+	durationMs?: number | null;
 }
 
 export const AGENT_EXECUTION_RECEIPT_SCHEMA = {

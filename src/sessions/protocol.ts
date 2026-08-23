@@ -16,6 +16,7 @@ export type AgentSessionOperation =
 	| 'append'
 	| 'interrupt'
 	| 'querySession'
+	| 'querySessionDetail'
 	| 'updateSession'
 	| 'queryHistory'
 	| 'reconnectMcp'

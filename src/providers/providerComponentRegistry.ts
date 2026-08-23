@@ -293,6 +293,7 @@ export class ProviderComponentRegistry implements vscode.Disposable {
 					|| process.env.COPILOT_GITHUB_TOKEN
 					|| process.env.GH_TOKEN
 					|| process.env.GITHUB_TOKEN,
+				customEndpointSecretProvider: async (reference) => this.options.secretStorage?.get(reference),
 			})
 		);
 		this.copilotRuntime = runtimeFactory(installer.executablePath, this.options.storagePath);
@@ -300,7 +301,7 @@ export class ProviderComponentRegistry implements vscode.Disposable {
 		this.secretStorageChangeSubscription?.dispose();
 		if (this.options.secretStorage) {
 			this.secretStorageChangeSubscription = this.options.secretStorage.onDidChange((e) => {
-				if (e.key === COPILOT_GITHUB_TOKEN_SECRET) {
+				if (e.key === COPILOT_GITHUB_TOKEN_SECRET || e.key.startsWith('chat.lm.secret.')) {
 					this.copilotRuntime?.invalidate();
 				}
 			});

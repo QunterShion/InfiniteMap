@@ -18,6 +18,7 @@ import {
 	SessionCapabilities,
 	SessionMutationInput,
 	SessionSnapshot,
+	SessionTranscriptEntry,
 } from '../../sessions/types';
 import { CodexAppServerClient, CodexRpcError } from './CodexAppServerClient';
 import { CodexRuntimeManager, CodexRuntimeProbe } from './CodexRuntimeManager';
@@ -31,9 +32,16 @@ import {
 	CodexTurn,
 	RpcNotification,
 } from './protocol';
+import {
+	codexItemToTranscript,
+	codexThreadToTranscript,
+	isoFromMillis,
+	transcriptDetail,
+} from './CodexTranscriptMapper';
 
 const PROVIDER_ID = 'codex';
 const EXTENSION_ID = 'chanterxiao.infinite-map';
+const MODEL_REASONING_SUMMARY = 'detailed';
 
 interface SessionState {
 	executionId: string;
@@ -46,6 +54,7 @@ interface SessionState {
 	effectiveModel?: string;
 	workingDirectory?: string;
 	loaded: boolean;
+	transcript: SessionTranscriptEntry[];
 }
 
 interface SubmissionState {
@@ -76,7 +85,6 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 	private readonly eventEmitter = new vscode.EventEmitter<AgentSessionEventPayload>();
 	private readonly sessions = new Map<string, SessionState>();
 	private readonly submissions = new Map<string, SubmissionState>();
-	private readonly eventIds = new Set<string>();
 	private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
 	private readonly permissionProfileIds = new Map<string, string>([
 		['codex:ask', ':workspace'],
@@ -211,6 +219,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				'The complete Provider session trace is supplied as application context on each turn.',
 			].join('\n'),
 			config: {
+				model_reasoning_summary: MODEL_REASONING_SUMMARY,
 				mcp_servers: {
 					infiniteMap: {
 						command: input.mcpServer.command,
@@ -239,9 +248,10 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			sequence: 0,
 			updatedAt: new Date().toISOString(),
 			requestedModel: input.modelId,
-				effectiveModel: response.model || input.modelId,
-				workingDirectory: input.workingDirectory,
+			effectiveModel: response.model || input.modelId,
+			workingDirectory: input.workingDirectory,
 			loaded: true,
+			transcript: [],
 		});
 		return session;
 	}
@@ -257,6 +267,9 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				threadId: input.session.sessionId,
 				model: input.modelId,
 				...permissionConfig,
+				config: {
+					model_reasoning_summary: MODEL_REASONING_SUMMARY,
+				},
 			});
 			state.loaded = true;
 		}
@@ -424,6 +437,21 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		}
 		clearTimeout(pending.timer);
 		this.pendingServerRequests.delete(input.requestId);
+		const state = this.findState(pending.sessionId);
+		if (state) {
+			this.upsertTranscript(state, {
+				id: `approval:${input.requestId}`,
+				turnId: pending.params?.turnId,
+				itemId: pending.params?.itemId,
+				kind: 'approval',
+				title: pending.params?.title || pending.params?.reason || pending.params?.message || pending.method,
+				text: pending.params?.description,
+				status: input.decision === 'approve' ? 'approved' : 'denied',
+				detail: { method: pending.method, request: pending.params, value: input.value },
+				completedAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			});
+		}
 		pending.resolve(this.serverRequestResult(pending.method, pending.params, input.decision, input.value));
 	}
 
@@ -437,7 +465,6 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		this.eventEmitter.dispose();
 		this.sessions.clear();
 		this.submissions.clear();
-		this.eventIds.clear();
 		for (const [requestId, pending] of this.pendingServerRequests) {
 			clearTimeout(pending.timer);
 			pending.resolve(this.serverRequestResult(pending.method, pending.params, 'deny'));
@@ -480,10 +507,22 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				if (!state) {
 					return this.serverRequestResult(method, params, 'deny');
 				}
-				const requestId = rpcRequestId === undefined || rpcRequestId === null
-					? randomUUID()
-					: String(rpcRequestId);
-				this.emit(state, 'session.input.required', {
+					const requestId = rpcRequestId === undefined || rpcRequestId === null
+						? randomUUID()
+						: String(rpcRequestId);
+					this.upsertTranscript(state, {
+						id: `approval:${requestId}`,
+						turnId: params?.turnId,
+						itemId: params?.itemId,
+						kind: 'approval',
+						title: params?.title || params?.reason || params?.message || method,
+						text: params?.description,
+						status: 'pending',
+						detail: { method, request: params },
+						startedAt: new Date().toISOString(),
+						updatedAt: new Date().toISOString(),
+					});
+					this.emit(state, 'session.input.required', {
 					kind: method.includes('requestUserInput') || method.includes('elicitation') ? 'question' : 'approval',
 					requestId,
 					method,
@@ -498,6 +537,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 							return;
 						}
 						this.pendingServerRequests.delete(requestId);
+						this.updateApprovalTranscript(state, requestId, 'expired');
 						resolve(this.serverRequestResult(method, params, 'deny'));
 					}, 300_000);
 					this.pendingServerRequests.set(requestId, {
@@ -583,15 +623,6 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		}
 		const turnId = params.turn?.id || params.turnId || state.activeTurnId || '';
 		const itemId = params.item?.id || params.itemId || '';
-		const eventId = [notification.method, threadId || '', turnId, itemId, params.requestId ?? '', params.delta || ''].join(':');
-		if (this.eventIds.has(eventId)) {
-			return;
-		}
-		this.eventIds.add(eventId);
-		if (this.eventIds.size > 10_000) {
-			this.eventIds.clear();
-			this.eventIds.add(eventId);
-		}
 
 		switch (notification.method) {
 			case CODEX_METHODS.turnStarted:
@@ -606,15 +637,111 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				});
 				break;
 			case CODEX_METHODS.agentMessageDelta:
-			case CODEX_METHODS.commandOutputDelta:
+				this.appendTranscriptText(state, itemId, {
+					turnId,
+					kind: 'assistant',
+				}, 'text', params.delta);
 				this.emit(state, 'session.delta', { method: notification.method, ...params });
 				break;
-			case CODEX_METHODS.itemStarted:
+			case CODEX_METHODS.commandOutputDelta:
+				this.appendTranscriptDetailText(state, itemId, {
+					turnId,
+					kind: 'command',
+					status: 'inProgress',
+				}, 'output', params.delta);
+				this.emit(state, 'session.delta', { method: notification.method, ...params });
+				break;
+			case CODEX_METHODS.reasoningSummaryTextDelta:
+				this.appendIndexedTranscriptText(state, itemId, {
+					turnId,
+					kind: 'reasoning',
+					status: 'inProgress',
+				}, 'summary', params.delta, 'summaryIndex', params.summaryIndex);
+				break;
+			case CODEX_METHODS.reasoningSummaryPartAdded:
+				this.upsertTranscript(state, {
+					id: itemId,
+					itemId,
+					turnId,
+					kind: 'reasoning',
+					status: 'inProgress',
+					updatedAt: new Date().toISOString(),
+				});
+				break;
+			case CODEX_METHODS.reasoningTextDelta:
+				this.appendIndexedTranscriptText(state, itemId, {
+					turnId,
+					kind: 'reasoning',
+					status: 'inProgress',
+				}, 'text', params.delta, 'contentIndex', params.contentIndex);
+				break;
+			case CODEX_METHODS.fileChangeOutputDelta:
+				this.appendTranscriptDetailText(state, itemId, {
+					turnId,
+					kind: 'file-change',
+					status: 'inProgress',
+				}, 'output', params.delta);
+				break;
+			case CODEX_METHODS.fileChangePatchUpdated:
+				this.upsertTranscript(state, {
+					id: itemId,
+					itemId,
+					turnId,
+					kind: 'file-change',
+					title: this.fileChangeTitle(params.changes),
+					status: 'inProgress',
+					detail: { changes: params.changes || [] },
+					updatedAt: new Date().toISOString(),
+				});
+				break;
+			case CODEX_METHODS.mcpToolCallProgress:
+				this.appendTranscriptDetailText(state, itemId, {
+					turnId,
+					kind: 'mcp-tool',
+					status: 'inProgress',
+				}, 'progress', `${params.message || ''}\n`);
+				break;
+			case CODEX_METHODS.itemStarted: {
+				const entry = codexItemToTranscript(params.item, {
+					turnId,
+					startedAt: isoFromMillis(params.startedAtMs),
+				});
+				if (entry.kind === 'reasoning' && !entry.status) {
+					entry.status = 'inProgress';
+				}
+				this.upsertTranscript(state, entry);
 				this.emit(state, 'session.tool.started', params);
 				break;
-			case CODEX_METHODS.itemCompleted:
-			case CODEX_METHODS.turnDiffUpdated:
+			}
+			case CODEX_METHODS.itemCompleted: {
+				const entry = codexItemToTranscript(params.item, {
+					turnId,
+					completedAt: isoFromMillis(params.completedAtMs),
+				});
+				this.upsertTranscript(state, entry);
 				this.emit(state, 'session.tool.completed', { method: notification.method, ...params });
+				break;
+			}
+			case CODEX_METHODS.turnDiffUpdated:
+				this.upsertTranscript(state, {
+					id: `${turnId}:diff`,
+					turnId,
+					kind: 'file-change',
+					title: 'Turn diff',
+					status: 'inProgress',
+					detail: { diff: params.diff },
+					updatedAt: new Date().toISOString(),
+				});
+				break;
+			case CODEX_METHODS.turnPlanUpdated:
+				this.upsertTranscript(state, {
+					id: `${turnId}:plan`,
+					turnId,
+					kind: 'plan',
+					text: this.planText(params.plan),
+					detail: { explanation: params.explanation, steps: params.plan || [] },
+					updatedAt: new Date().toISOString(),
+				});
 				break;
 			case CODEX_METHODS.modelRerouted:
 				state.effectiveModel = params.toModel;
@@ -622,6 +749,16 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				this.emit(state, 'session.state.changed', { requestedModel: params.fromModel, effectiveModel: params.toModel });
 				break;
 			case CODEX_METHODS.turnError:
+				this.upsertTranscript(state, {
+					id: `${turnId}:error`,
+					turnId,
+					kind: 'error',
+					title: 'Turn failed',
+					text: params.error?.message || String(params.error || 'Codex turn failed.'),
+					status: params.willRetry ? 'retrying' : 'failed',
+					detail: { providerError: params.error, willRetry: !!params.willRetry },
+					updatedAt: new Date().toISOString(),
+				});
 				this.updateState(state, params.willRetry ? 'running' : 'failed', {
 					error: params.error?.message || String(params.error || 'Codex turn failed.'),
 					providerError: params.error,
@@ -636,6 +773,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				if (pending && pending.sessionId === state.session.sessionId) {
 					clearTimeout(pending.timer);
 					this.pendingServerRequests.delete(requestId);
+					this.updateApprovalTranscript(state, requestId, 'resolved');
 					pending.resolve(this.serverRequestResult(pending.method, pending.params, 'deny'));
 					this.emit(state, 'session.input.resolved', { requestId, method: pending.method });
 				}
@@ -643,6 +781,9 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			}
 			case CODEX_METHODS.turnCompleted: {
 				const status = params.turn?.status;
+				for (const entry of codexThreadToTranscript({ id: threadId, turns: params.turn ? [params.turn] : [] })) {
+					this.upsertTranscript(state, entry);
+				}
 				state.activeTurnId = undefined;
 				state.session.turnId = turnId || state.session.turnId;
 				const mapped = status === 'interrupted' ? 'interrupted' : status === 'failed' ? 'failed' : 'idle';
@@ -687,18 +828,142 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 				session,
 				status: 'disconnected',
 				sequence: 0,
-					updatedAt: new Date().toISOString(),
-					workingDirectory: undefined,
+				updatedAt: new Date().toISOString(),
+				workingDirectory: undefined,
 				loaded: false,
+				transcript: [],
 			};
 			this.sessions.set(threadId, state);
 		}
 		const turns = response.thread.turns || [];
+		state.transcript = codexThreadToTranscript(response.thread);
 		const active = [...turns].reverse().find((turn) => turn.status === 'inProgress');
 		state.activeTurnId = active?.id;
 		const last = turns[turns.length - 1];
 		const status = active ? 'running' : last?.status === 'interrupted' ? 'interrupted' : last?.status === 'failed' ? 'failed' : 'idle';
 		this.updateState(state, status);
+	}
+
+	private upsertTranscript(state: SessionState, next: SessionTranscriptEntry): void {
+		const index = state.transcript.findIndex((entry) => entry.id === next.id);
+		const previous = index >= 0 ? state.transcript[index] : undefined;
+		const entry: SessionTranscriptEntry = {
+			...previous,
+			...next,
+			summary: next.summary === undefined ? previous?.summary : next.summary,
+			text: next.text === undefined ? previous?.text : next.text,
+			detail: next.detail === undefined ? previous?.detail : next.detail,
+			startedAt: next.startedAt || previous?.startedAt,
+			completedAt: next.completedAt || previous?.completedAt,
+		};
+		if (index >= 0) {
+			state.transcript[index] = entry;
+		} else {
+			state.transcript.push(entry);
+		}
+		state.updatedAt = entry.updatedAt;
+		this.emit(state, 'session.transcript.updated', { entry });
+	}
+
+	private appendTranscriptText(
+		state: SessionState,
+		itemId: string,
+		base: Pick<SessionTranscriptEntry, 'turnId' | 'kind' | 'status'>,
+		field: 'summary' | 'text',
+		delta: unknown
+	): void {
+		if (!itemId || typeof delta !== 'string' || !delta) {
+			return;
+		}
+		const previous = state.transcript.find((entry) => entry.id === itemId);
+		this.upsertTranscript(state, {
+			id: itemId,
+			itemId,
+			...base,
+			[field]: `${previous?.[field] || ''}${delta}`,
+			updatedAt: new Date().toISOString(),
+		});
+	}
+
+	private appendTranscriptDetailText(
+		state: SessionState,
+		itemId: string,
+		base: Pick<SessionTranscriptEntry, 'turnId' | 'kind' | 'status'>,
+		field: string,
+		delta: unknown
+	): void {
+		if (!itemId || typeof delta !== 'string' || !delta) {
+			return;
+		}
+		const previous = state.transcript.find((entry) => entry.id === itemId);
+		const detail = transcriptDetail(previous?.detail);
+		this.upsertTranscript(state, {
+			id: itemId,
+			itemId,
+			...base,
+			detail: { ...detail, [field]: `${detail[field] || ''}${delta}` },
+			updatedAt: new Date().toISOString(),
+		});
+	}
+
+	private appendIndexedTranscriptText(
+		state: SessionState,
+		itemId: string,
+		base: Pick<SessionTranscriptEntry, 'turnId' | 'kind' | 'status'>,
+		field: 'summary' | 'text',
+		delta: unknown,
+		indexField: 'summaryIndex' | 'contentIndex',
+		partIndex: unknown
+	): void {
+		if (!itemId || typeof delta !== 'string' || !delta) {
+			return;
+		}
+		const previous = state.transcript.find((entry) => entry.id === itemId);
+		const detail = transcriptDetail(previous?.detail);
+		const changedPart = previous?.[field]
+			&& typeof partIndex === 'number'
+			&& typeof detail[indexField] === 'number'
+			&& detail[indexField] !== partIndex;
+		this.upsertTranscript(state, {
+			id: itemId,
+			itemId,
+			...base,
+			[field]: `${previous?.[field] || ''}${changedPart ? '\n\n' : ''}${delta}`,
+			detail: { ...detail, [indexField]: partIndex },
+			updatedAt: new Date().toISOString(),
+		});
+	}
+
+	private updateApprovalTranscript(state: SessionState, requestId: string, status: string): void {
+		const previous = state.transcript.find((entry) => entry.id === `approval:${requestId}`);
+		if (!previous) {
+			return;
+		}
+		this.upsertTranscript(state, {
+			...previous,
+			status,
+			completedAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		});
+	}
+
+	private fileChangeTitle(changes: unknown): string {
+		if (!Array.isArray(changes)) {
+			return 'File changes';
+		}
+		const paths = changes.map((change) => transcriptDetail(change).path).filter((value) => typeof value === 'string');
+		return paths.length === 1 ? paths[0] : `${paths.length} file changes`;
+	}
+
+	private planText(plan: unknown): string | undefined {
+		if (!Array.isArray(plan)) {
+			return undefined;
+		}
+		return plan.map((step) => {
+			const record = transcriptDetail(step);
+			const text = record.step || record.text || record.description || '';
+			return record.status ? `[${record.status}] ${text}` : String(text);
+		}).filter(Boolean).join('\n') || undefined;
 	}
 
 	private async restoreSession(
@@ -718,6 +983,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			updatedAt: new Date().toISOString(),
 			workingDirectory,
 			loaded: false,
+			transcript: [],
 		});
 	}
 
@@ -779,6 +1045,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			sequence: state.sequence,
 			updatedAt: state.updatedAt,
 			activeTurnId: state.activeTurnId,
+			transcript: state.transcript.map((entry) => ({ ...entry })),
 			effectiveConfig: {
 				modelId: state.session.modelId,
 				effort: state.session.effort,

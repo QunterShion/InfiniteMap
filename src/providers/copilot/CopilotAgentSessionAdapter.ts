@@ -19,9 +19,12 @@ import {
 	SessionCapabilities,
 	SessionMutationInput,
 	SessionSnapshot,
+	SessionTranscriptEntry,
 } from '../../sessions/types';
 import { INFINITE_MAP_CONTROL_INSTRUCTIONS } from '../codex/protocol';
+import { CopilotCustomEndpointModel } from './CopilotCustomEndpointReader';
 import { CopilotRuntimeManager, CopilotRuntimeProbe } from './CopilotRuntimeManager';
+import { copilotEventsToTranscript } from './CopilotTranscriptMapper';
 
 const PROVIDER_ID = 'copilot';
 const EXTENSION_ID = 'chanterxiao.infinite-map';
@@ -38,6 +41,9 @@ interface CopilotSessionState {
 	updatedAt: string;
 	activeTurnId?: string;
 	unsubscribers: Array<() => void>;
+	events: any[];
+	transcript: SessionTranscriptEntry[];
+	customEndpointName?: string;
 }
 
 interface PendingInput {
@@ -62,10 +68,10 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 				id: PROVIDER_ID,
 				displayName: 'Copilot',
 				componentExtensionId: EXTENSION_ID,
-					installState: probe.authenticated ? 'ready' : 'auth_required',
-					models: this.toModelOptions(probe.models),
+					installState: probe.authenticated || this.customModels(probe).length > 0 ? 'ready' : 'auth_required',
+					models: this.toModelOptions(probe.models, this.customModels(probe)),
 					permissionModes: await this.listPermissionModes(),
-				capabilities: this.capabilities(probe.authenticated ? 'ready' : 'auth_required'),
+				capabilities: this.capabilities(probe.authenticated || this.customModels(probe).length > 0 ? 'ready' : 'auth_required'),
 			};
 		} catch {
 			return {
@@ -82,11 +88,12 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 
 	public async detectCapabilities(): Promise<SessionCapabilities> {
 		const probe = await this.runtime.ensureProbe();
-		return this.capabilities(probe.authenticated ? 'ready' : 'auth_required');
+		return this.capabilities(probe.authenticated || this.customModels(probe).length > 0 ? 'ready' : 'auth_required');
 	}
 
 	public async listModels(): Promise<ProviderModelOption[]> {
-		return this.toModelOptions((await this.runtime.ensureProbe()).models);
+		const probe = await this.runtime.ensureProbe();
+		return this.toModelOptions(probe.models, this.customModels(probe));
 	}
 
 	public async listPermissionModes(
@@ -121,14 +128,14 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 	}
 
 	public async createSession(input: CreateSessionInput): Promise<AgentSessionRef> {
-		const probe = await this.ensureReady();
-		this.assertModel(probe.models, input.modelId, input.effort);
+		const probe = await this.ensureReadyForModel(input.modelId);
+		const model = this.resolveModel(probe, input.modelId, input.effort);
 		const permissionMode = await this.resolvePermissionMode(input.permissionModeId);
 		const requestedSessionId = randomUUID();
 		const sdkSession = await probe.client.createSession(this.sessionConfig({
 			...input,
 			permissionModeId: permissionMode.id,
-		}, requestedSessionId));
+			}, requestedSessionId, model));
 		const session: AgentSessionRef = {
 			provider: PROVIDER_ID,
 			sessionId: sdkSession.sessionId,
@@ -148,6 +155,9 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 			sequence: 0,
 			updatedAt: new Date().toISOString(),
 			unsubscribers: [],
+			events: [],
+			transcript: [],
+			...(model ? { customEndpointName: model.endpointName } : {}),
 		};
 		this.sessions.set(session.sessionId, state);
 		this.bindEvents(state);
@@ -184,15 +194,16 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 			if (!input.executionId || !input.workingDirectory || !input.mcpServer) {
 				throw this.withCode('NO_ACTIVE_SESSION', 'Copilot session recovery needs its workspace context.');
 			}
-			const probe = await this.ensureReady();
-				const sdkSession = await probe.client.resumeSession(input.session.sessionId, this.sessionConfig({
+			const probe = await this.ensureReadyForModel(input.session.modelId || '');
+			const model = this.resolveModel(probe, input.session.modelId || '', input.session.effort);
+			const sdkSession = await probe.client.resumeSession(input.session.sessionId, this.sessionConfig({
 				executionId: input.executionId,
 				workingDirectory: input.workingDirectory,
 				mcpServer: input.mcpServer,
 				modelId: input.session.modelId || '',
 					effort: input.session.effort,
 					permissionModeId: input.session.permissionModeId || 'copilot:ask',
-			}, input.session.sessionId));
+			}, input.session.sessionId, model));
 			state = {
 				executionId: input.executionId,
 					session: {
@@ -206,10 +217,14 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 				sequence: 0,
 				updatedAt: new Date().toISOString(),
 				unsubscribers: [],
+				events: [],
+				transcript: [],
+					...(model ? { customEndpointName: model.endpointName } : {}),
 			};
 			this.sessions.set(input.session.sessionId, state);
 			this.bindEvents(state);
 		}
+		await this.refreshTranscript(state);
 		return this.snapshot(state);
 	}
 
@@ -218,9 +233,12 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 		if (input.operation !== 'setModel' || !input.value) {
 			throw this.withCode('CAPABILITY_UNAVAILABLE', `Copilot does not support ${input.operation}.`);
 		}
-		const models = (await this.ensureReady()).models;
-		this.assertModel(models, input.value, undefined);
-		await state.sdkSession.setModel(input.value);
+		const probe = await this.ensureReadyForModel(input.value);
+		const model = this.resolveModel(probe, input.value);
+		if ((model?.endpointName || undefined) !== state.customEndpointName) {
+			throw this.withCode('CAPABILITY_UNAVAILABLE', 'Copilot provider changes require a new session.');
+		}
+		await state.sdkSession.setModel(model?.modelId || input.value);
 		state.session.modelId = input.value;
 		state.updatedAt = new Date().toISOString();
 		return this.snapshot(state);
@@ -289,11 +307,14 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 		input: SendSessionInput,
 		mode: 'enqueue' | 'immediate'
 	): Promise<{ turnId?: string; submissionId: string }> {
-		const probe = await this.ensureReady();
-		this.assertModel(probe.models, input.modelId, input.effort);
+		const probe = await this.ensureReadyForModel(input.modelId);
+		const model = this.resolveModel(probe, input.modelId, input.effort);
+		if ((model?.endpointName || undefined) !== state.customEndpointName) {
+			throw this.withCode('CAPABILITY_UNAVAILABLE', 'Switching between Copilot API and custom endpoint providers requires a new session.');
+		}
 		const permissionMode = await this.resolvePermissionMode(input.permissionModeId);
 		if (state.session.modelId !== input.modelId || state.session.effort !== input.effort) {
-			await state.sdkSession.setModel(input.modelId, { reasoningEffort: input.effort as any });
+			await state.sdkSession.setModel(model?.modelId || input.modelId, { reasoningEffort: input.effort as any });
 			state.session.modelId = input.modelId;
 			state.session.effort = input.effort;
 		}
@@ -311,11 +332,23 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 			CreateSessionInput,
 			'executionId' | 'workingDirectory' | 'mcpServer' | 'modelId' | 'effort' | 'permissionModeId'
 		>,
-		sessionId: string
+		sessionId: string,
+		model?: CopilotCustomEndpointModel
 	): SessionConfig {
 		return {
 			sessionId,
-			model: input.modelId,
+			model: model?.modelId || input.modelId,
+			...(model ? {
+				provider: {
+					type: 'openai' as const,
+					baseUrl: model.baseUrl,
+					wireApi: model.wireApi,
+					...(model.apiKey ? { apiKey: model.apiKey } : {}),
+					modelId: model.modelId,
+					wireModel: model.modelId,
+					...(model.maxInputTokens ? { maxPromptTokens: model.maxInputTokens } : {}),
+				},
+			} : {}),
 			reasoningEffort: input.effort as any,
 			workingDirectory: input.workingDirectory,
 			streaming: true,
@@ -341,6 +374,12 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 
 	private bindEvents(state: CopilotSessionState): void {
 		state.unsubscribers.push(state.sdkSession.on((event: any) => {
+		state.events.push(event);
+		state.transcript = copilotEventsToTranscript(state.events);
+		const latestTranscriptEntry = state.transcript[state.transcript.length - 1];
+		if (latestTranscriptEntry) {
+			this.emit(state, 'session.transcript.updated', { entry: latestTranscriptEntry });
+		}
 			switch (event.type) {
 				case 'assistant.message_delta':
 					this.emit(state, 'session.delta', { delta: event.data?.deltaContent || '' });
@@ -437,16 +476,16 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 		});
 	}
 
-	private async ensureReady(): Promise<CopilotRuntimeProbe> {
+	private async ensureReadyForModel(modelId?: string): Promise<CopilotRuntimeProbe> {
 		const probe = await this.runtime.ensureProbe();
-		if (!probe.authenticated) {
+		if (!probe.authenticated && !this.customModels(probe).some((model) => model.selectionId === modelId)) {
 			throw this.withCode('AUTH_REQUIRED', 'Copilot authentication is required.');
 		}
 		return probe;
 	}
 
-	private toModelOptions(models: ModelInfo[]): ProviderModelOption[] {
-		return models
+	private toModelOptions(models: ModelInfo[], customModels: CopilotCustomEndpointModel[] = []): ProviderModelOption[] {
+		const sdkModels = models
 			.filter((model) => model.policy?.state !== 'disabled')
 			.map((model) => ({
 				id: model.id,
@@ -457,15 +496,45 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 				})),
 				defaultEffort: model.defaultReasoningEffort,
 			}));
+		const custom = customModels.map((model) => ({
+			id: model.selectionId,
+			label: model.label,
+			effortOptions: [],
+			defaultEffort: undefined,
+		}));
+		return [...sdkModels, ...custom.filter((model) => !sdkModels.some((candidate) => candidate.id === model.id))];
 	}
 
-	private assertModel(models: ModelInfo[], modelId: string, effort?: string): void {
-		const model = models.find((candidate) => candidate.id === modelId);
+	private resolveModel(probe: CopilotRuntimeProbe, modelId: string, effort?: string): CopilotCustomEndpointModel | undefined {
+		const custom = this.customModels(probe).find((candidate) => candidate.selectionId === modelId);
+		if (custom) {
+			if (effort) {
+				throw this.withCode('EFFORT_UNAVAILABLE', `Selected Copilot custom endpoint model does not expose reasoning effort: ${modelId}`);
+			}
+			return custom;
+		}
+		const model = probe.models.find((candidate) => candidate.id === modelId);
 		if (!model) {
 			throw this.withCode('MODEL_UNAVAILABLE', `Selected Copilot model is unavailable: ${modelId}`);
 		}
 		if (effort && !(model.supportedReasoningEfforts || []).includes(effort as any)) {
 			throw this.withCode('EFFORT_UNAVAILABLE', `Selected Copilot effort is unavailable: ${effort}`);
+		}
+		return undefined;
+	}
+
+	private customModels(probe: CopilotRuntimeProbe): CopilotCustomEndpointModel[] {
+		return probe.customEndpointModels || [];
+	}
+
+	private async refreshTranscript(state: CopilotSessionState): Promise<void> {
+		try {
+			state.events = await state.sdkSession.getEvents();
+			state.transcript = copilotEventsToTranscript(state.events);
+		} catch {
+			// A session can be readable even when the runtime has no persisted event log.
+			state.events = state.events || [];
+			state.transcript = copilotEventsToTranscript(state.events);
 		}
 	}
 
@@ -548,6 +617,7 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 			sequence: state.sequence,
 			updatedAt: state.updatedAt,
 			activeTurnId: state.activeTurnId,
+			transcript: state.transcript,
 			effectiveConfig: {
 				modelId: state.session.modelId,
 				effort: state.session.effort,

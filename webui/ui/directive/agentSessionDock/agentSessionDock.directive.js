@@ -52,6 +52,30 @@ angular.module('kityminderEditor').directive('agentSessionDock', function() {
 				closeDrawer(scope.sessionDock.activeDrawer, true);
 			}
 
+			function isAgentControlSurface(event) {
+				var target = event && event.target;
+				var path = event && typeof event.composedPath === 'function' ? event.composedPath() : [];
+				for (var index = 0; index < path.length; index += 1) {
+					var pathElement = path[index];
+					if (pathElement && pathElement.getAttribute &&
+						pathElement.getAttribute('data-agent-control-surface') !== null) return true;
+				}
+				if (!target) return false;
+				var candidate = target.nodeType === 1 ? target : target.parentNode;
+				while (candidate && candidate !== document) {
+					if (candidate.getAttribute && candidate.getAttribute('data-agent-control-surface') !== null) {
+						return true;
+					}
+					candidate = candidate.parentNode;
+				}
+				return false;
+			}
+
+			function handleDocumentClick(event) {
+				if (!scope.sessionDock.activeDrawer || isAgentControlSurface(event)) return;
+				closeDrawer(scope.sessionDock.activeDrawer, false);
+			}
+
 			scope.toggleSessionDrawer = function(drawer) {
 				if (drawerNames.indexOf(drawer) === -1) return;
 				if (scope.sessionDock.activeDrawer === drawer) {
@@ -77,9 +101,11 @@ angular.module('kityminderEditor').directive('agentSessionDock', function() {
 
 			document.addEventListener('agent-session-drawer-state', syncDrawerState);
 			document.addEventListener('keydown', handleEscape);
+			document.addEventListener('click', handleDocumentClick);
 			scope.$on('$destroy', function() {
 				document.removeEventListener('agent-session-drawer-state', syncDrawerState);
 				document.removeEventListener('keydown', handleEscape);
+				document.removeEventListener('click', handleDocumentClick);
 			});
 		}
 	};

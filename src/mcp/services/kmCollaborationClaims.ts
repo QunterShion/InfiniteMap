@@ -362,11 +362,9 @@ export async function completeCollaborationClaim(
       parentCompleted: true,
     }));
 
-    const sessionPlan = sessionUpdate
-      ? plans.find((plan) => {
-          const state = readSessionState(resolved);
-          return state.executions[sessionUpdate.executionId]?.nodeId === plan.nodeId;
-        })
+    const sessionState = sessionUpdate ? await readSessionState(resolved) : undefined;
+    const sessionPlan = sessionUpdate && sessionState
+      ? plans.find((plan) => sessionState.executions[sessionUpdate.executionId]?.nodeId === plan.nodeId)
       : undefined;
     if (sessionUpdate && !sessionPlan) {
       throw new Error('executionId 对应节点不属于本次协同完成目标');

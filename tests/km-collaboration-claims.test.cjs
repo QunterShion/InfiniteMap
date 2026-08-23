@@ -57,7 +57,7 @@ function createFixture(t) {
 test('claims collaboration tasks without modifying the KM file', async (t) => {
   const filePath = createFixture(t);
   const before = fs.readFileSync(filePath, 'utf8');
-  const revision = getKmFileRevision(filePath);
+  const revision = await getKmFileRevision(filePath);
 
   const claim = await claimCollaborationTasks(filePath, 'agent-a', {
     expectedFileRevision: revision,
@@ -69,7 +69,7 @@ test('claims collaboration tasks without modifying the KM file', async (t) => {
   assert.ok(claim.tasks.every((task) => task.baseSubtreeHash));
   assert.equal(fs.readFileSync(filePath, 'utf8'), before);
 
-  const execState = readExecState(filePath);
+  const execState = await readExecState(filePath);
   assert.equal(execState.tasks['collab-a'].taskKind, 'collaboration');
   assert.equal(execState.tasks['collab-a'].state, 'claimed');
 });
@@ -89,9 +89,9 @@ test('different workers complete independent collaboration nodes after unrelated
     { nodeId: 'collab-b', childTexts: ['idea B1'] },
   ]);
   assert.equal(completedB.verified, true);
-  assert.equal(listCollaborationTasks(filePath).taskCount, 0);
+  assert.equal((await listCollaborationTasks(filePath)).taskCount, 0);
 
-  const doc = readKmFile(filePath);
+  const doc = await readKmFile(filePath);
   for (const node of doc.root.children) {
     assert.deepEqual(node.data.resource, [DONE]);
   }
@@ -113,13 +113,13 @@ test('dry-run previews collaboration completion without writing', async (t) => {
   assert.equal(result.completedCount, 1);
   assert.equal(result.appendedCount, 1);
   assert.equal(fs.readFileSync(filePath, 'utf8'), before);
-  assert.equal(readExecState(filePath).tasks['collab-a'].state, 'claimed');
+  assert.equal((await readExecState(filePath)).tasks['collab-a'].state, 'claimed');
 });
 
 test('session trace metadata does not invalidate a collaboration claim', async (t) => {
   const filePath = createFixture(t);
   const claim = await claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
-  const doc = readKmFile(filePath);
+  const doc = await readKmFile(filePath);
   doc.root.children[0].data.infiniteMap = {
     latestSession: { executionId: 'exec-1', provider: 'codex' },
   };
@@ -134,7 +134,7 @@ test('session trace metadata does not invalidate a collaboration claim', async (
 test('rejects completion when the claimed collaboration subtree changed', async (t) => {
   const filePath = createFixture(t);
   const claim = await claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
-  const doc = readKmFile(filePath);
+  const doc = await readKmFile(filePath);
   doc.root.children[0].children[0].data.text = 'manually changed';
   fs.writeFileSync(filePath, JSON.stringify(doc, null, 2), 'utf8');
   const before = fs.readFileSync(filePath, 'utf8');
@@ -151,7 +151,7 @@ test('rejects completion when the claimed collaboration subtree changed', async 
 test('batch completion is all-or-nothing when one target conflicts', async (t) => {
   const filePath = createFixture(t);
   const claim = await claimCollaborationTasks(filePath, 'agent-a');
-  const doc = readKmFile(filePath);
+  const doc = await readKmFile(filePath);
   doc.root.children[1].data.text = 'collaboration B changed';
   fs.writeFileSync(filePath, JSON.stringify(doc, null, 2), 'utf8');
   const before = fs.readFileSync(filePath, 'utf8');
@@ -164,7 +164,7 @@ test('batch completion is all-or-nothing when one target conflicts', async (t) =
     /子树在认领后已被修改/
   );
   assert.equal(fs.readFileSync(filePath, 'utf8'), before);
-  assert.equal(listCollaborationTasks(filePath).taskCount, 2);
+  assert.equal((await listCollaborationTasks(filePath)).taskCount, 2);
 });
 
 test('collaboration claims reuse renew and release, then can be reclaimed', async (t) => {
@@ -175,7 +175,7 @@ test('collaboration claims reuse renew and release, then can be reclaimed', asyn
 
   const released = await releaseClaim(filePath, claim.claimId, { failReason: 'agent failed' });
   assert.equal(released.state, 'failed');
-  assert.deepEqual(readKmFile(filePath).root.children[0].data.resource, [COLLABORATION]);
+  assert.deepEqual((await readKmFile(filePath)).root.children[0].data.resource, [COLLABORATION]);
 
   const reclaimed = await claimCollaborationTasks(filePath, 'agent-b', {
     nodeIds: ['collab-a'],
@@ -187,7 +187,7 @@ test('collaboration claims reuse renew and release, then can be reclaimed', asyn
 test('legacy completion tools cannot bypass an active collaboration lease', async (t) => {
   const filePath = createFixture(t);
   const claim = await claimCollaborationTasks(filePath, 'agent-a', { nodeIds: ['collab-a'] });
-  const revision = getKmFileRevision(filePath);
+  const revision = await getKmFileRevision(filePath);
 
   await assert.rejects(
     expandCollaborationTask(filePath, 'collab-a', revision, ['legacy idea']),

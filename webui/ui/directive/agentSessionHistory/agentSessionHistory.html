@@ -5,8 +5,6 @@
             <div id="agent-session-history-drawer-title" data-slot="history-title">{{ 'history' | agentSessionText }}</div>
             <div data-slot="history-meta">{{ history.total }} {{ 'records' | agentSessionText }}</div>
         </div>
-        <button data-slot="button close-button" type="button" ng-click="closeHistory()"
-                aria-label="{{ 'close' | agentSessionText }}">{{ 'close' | agentSessionText }}</button>
     </header>
     <div data-slot="notice" ng-if="history.orphan">{{ 'orphan' | agentSessionText }}</div>
     <div data-slot="notice" ng-if="history.loading">{{ 'loading' | agentSessionText }}</div>

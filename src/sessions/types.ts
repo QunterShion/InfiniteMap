@@ -129,6 +129,43 @@ export interface SessionConfiguration {
 	permissionModeId?: string;
 }
 
+export type SessionTranscriptKind =
+	| 'user'
+	| 'assistant'
+	| 'reasoning'
+	| 'plan'
+	| 'command'
+	| 'file-change'
+	| 'mcp-tool'
+	| 'tool'
+	| 'collaboration'
+	| 'web-search'
+	| 'image'
+	| 'approval'
+	| 'status'
+	| 'error';
+
+/**
+ * Provider-neutral, JSON-safe session content used by both live updates and
+ * restored history. `summary` is Provider-exposed reasoning/result summary;
+ * it must not be presented as a hidden chain of thought.
+ */
+export interface SessionTranscriptEntry {
+	id: string;
+	turnId?: string;
+	itemId?: string;
+	kind: SessionTranscriptKind;
+	title?: string;
+	summary?: string;
+	text?: string;
+	status?: string;
+	phase?: 'commentary' | 'final_answer';
+	detail?: unknown;
+	startedAt?: string;
+	completedAt?: string;
+	updatedAt: string;
+}
+
 export interface SessionSnapshot {
 	executionId: string;
 	status: NodeExecutionStatus;
@@ -139,6 +176,7 @@ export interface SessionSnapshot {
 	activeTurnId?: string;
 	requestedConfig?: SessionConfiguration;
 	effectiveConfig?: SessionConfiguration;
+	transcript?: SessionTranscriptEntry[];
 	degradations?: Array<{
 		field: string;
 		action: 'dropped' | 'substituted' | 'blocked';
@@ -208,6 +246,7 @@ export interface AgentSessionEventPayload {
 		| 'models.changed'
 		| 'session.state.changed'
 		| 'session.delta'
+		| 'session.transcript.updated'
 		| 'session.tool.started'
 		| 'session.tool.completed'
 		| 'session.input.required'

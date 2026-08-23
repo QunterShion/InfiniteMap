@@ -142,6 +142,53 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 		}
 	}
 
+	private async findSessionRecord(
+		document: vscode.CustomDocument,
+		executionId: string,
+		nodeId?: string
+	): Promise<{
+		executionId: string;
+		nodeId?: string;
+		status: import('./types').NodeExecutionStatus;
+		session: import('./types').AgentSessionRef;
+		requestedConfig?: import('./types').SessionConfiguration;
+		effectiveConfig?: import('./types').SessionConfiguration;
+		updatedAt: string;
+		summary?: string;
+		artifacts?: unknown[];
+		error?: unknown;
+	} | undefined> {
+		let cursor: string | undefined;
+		do {
+			const page = await this.callKmTool(document, 'km_list_node_sessions', {
+				filePath: document.uri.fsPath,
+				...(nodeId ? { nodeId } : {}),
+				...(cursor ? { cursor } : {}),
+				limit: 100,
+			}) as {
+				sessions?: Array<{
+					executionId: string;
+					nodeId?: string;
+					status: import('./types').NodeExecutionStatus;
+					session: import('./types').AgentSessionRef;
+					requestedConfig?: import('./types').SessionConfiguration;
+					effectiveConfig?: import('./types').SessionConfiguration;
+					updatedAt: string;
+					summary?: string;
+					artifacts?: unknown[];
+					error?: unknown;
+				}>;
+				nextCursor?: string | null;
+			};
+			const match = (page.sessions || []).find((candidate) => candidate.executionId === executionId);
+			if (match) {
+				return match;
+			}
+			cursor = page.nextCursor || undefined;
+		} while (cursor);
+		return undefined;
+	}
+
 	public async handle(
 		request: AgentSessionRequest,
 		document: vscode.CustomDocument,
@@ -247,9 +294,38 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 						session: await this.orchestrator.interrupt(documentKey, request.expectedTurnId),
 					});
 					break;
-				case 'querySession':
-					response = this.success(request, { session: await this.orchestrator.query(documentKey) });
-					break;
+					case 'querySession':
+						response = this.success(request, { session: await this.orchestrator.query(documentKey) });
+						break;
+					case 'querySessionDetail': {
+						if (!request.executionId) {
+							throw this.error('INTERNAL_ERROR', 'An executionId is required to read session detail.', false);
+						}
+						const live = this.orchestrator.getSnapshot(documentKey);
+						if (live?.executionId === request.executionId) {
+							response = this.success(request, { session: live });
+							break;
+						}
+						const record = await this.findSessionRecord(document, request.executionId, request.nodeId);
+						if (!record) {
+							throw this.error('NO_ACTIVE_SESSION', `Session history was not found: ${request.executionId}`, false);
+						}
+						const workspace = this.requireTrustedWorkspace(document);
+						const providerSnapshot = await this.orchestrator.readSessionDetail({
+							executionId: record.executionId,
+							session: record.session,
+							workingDirectory: workspace.uri.fsPath,
+							mcpServer: this.mcpServerLaunch(),
+						});
+						response = this.success(request, {
+							session: {
+								...record,
+								...providerSnapshot,
+								session: { ...record.session, ...providerSnapshot.session },
+							},
+						});
+						break;
+					}
 				case 'resolveInput':
 					if (!request.inputRequestId || !request.decision) {
 						throw this.error('CAPABILITY_UNAVAILABLE', 'A pending input request and decision are required.', false);

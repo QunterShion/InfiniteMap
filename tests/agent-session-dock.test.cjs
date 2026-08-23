@@ -98,18 +98,33 @@ test('session dock exposes activity and history as accessible right-edge tabs wi
 	assert.doesNotMatch(editorTemplate, /agent-session-log/);
   assert.match(editorTemplate, /agent-session-dock/);
 	assert.match(editorTemplate, /agent-session-detail/);
+	assert.match(editorTemplate, /agent-session-detail data-agent-control-surface/);
 	assert.match(detailDirective, /agent-session-live-detail/);
+	assert.match(detailDirective, /event\.target !== modalHost/);
+	assert.match(detailDirective, /has-session-detail-open/);
 	for (const template of [dockTemplate, activityTemplate, historyTemplate, detailTemplate]) {
 		assert.match(template, /data-agent-control-surface/);
 	}
 	assert.match(activityTemplate, /activity\.visible && !sessionDetail\.visible/);
 	assert.match(historyTemplate, /history\.visible && !sessionDetail\.visible/);
-	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?width: ~"min\(42ch,/);
+	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?width: ~"min\(108ch,/);
 	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?left:\s*50%/);
+	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?color-scheme:\s*light/);
 	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?transform:\s*translate\(-50%, -50%\)/);
-	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?height: ~"min\(calc\(var\(--spacing\) \* 88\)/);
+	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?height: ~"min\(calc\(var\(--spacing\) \* 160\)/);
 	assert.match(sessionLess, /\[data-slot="session-detail-body"\][\s\S]*?overflow-y:\s*auto/);
+	assert.match(sessionLess, /\[agent-session-detail\]\.is-open[\s\S]*?inset:\s*0/);
+	assert.match(sessionLess, /\.minder-editor-container\.has-session-detail-open[\s\S]*?agent-control-bar/);
 	assert.match(detailTemplate, /data-slot="session-detail-body" role="region" tabindex="0"/);
+	assert.match(detailTemplate, /role="dialog" aria-modal="true"/);
+	assert.match(detailTemplate, /data-slot="session-result"/);
+	assert.match(detailTemplate, /data-slot="reasoning-detail"/);
+	assert.match(detailTemplate, /entry\.kind === 'reasoning' && entry\.hasReasoningContent/);
+	assert.match(detailTemplate, /data-slot="reasoning-empty"/);
+	assert.match(detailTemplate, /reasoningPending/);
+	assert.match(detailTemplate, /reasoningUnavailable/);
+	assert.match(detailDirective, /entry\.hasReasoningContent = !!\(entry\.summary \|\| entry\.text\)/);
+	assert.match(detailTemplate, /data-slot="technical-detail"/);
 	assert.doesNotMatch(editorLess, /agentSessionLog\.less/);
   assert.match(editorLess, /agentSessionDock\.less/);
   assert.match(dockLess, /right:\s*0/);
@@ -127,7 +142,24 @@ test('session detail opens from either list and hydrates live agent events', () 
 			return {
 				executionId,
 				status: 'running',
-				events: [{ id: 1, type: 'session.delta', text: '实时内容', updatedAt: '2026-08-22T10:00:00.000Z' }]
+				transcript: [{
+					id: 'reasoning-1', turnId: 'turn-1', kind: 'reasoning', summary: '先检查现状',
+					text: '模型开放的推理内容', updatedAt: '2026-08-22T09:59:57.000Z'
+				}, {
+					id: 'command-1', turnId: 'turn-1', kind: 'command', title: 'npm test', status: 'completed',
+					detail: { cwd: '/workspace', output: 'all passed', exitCode: 0, durationMs: 300 },
+					updatedAt: '2026-08-22T09:59:58.000Z'
+				}, {
+					id: 'file-1', turnId: 'turn-1', kind: 'file-change', status: 'completed',
+					detail: { changes: [{ path: 'src/app.ts', kind: { type: 'update' }, diff: '+fixed' }] },
+					updatedAt: '2026-08-22T09:59:59.000Z'
+				}, {
+					id: 'agent-1', turnId: 'turn-1', kind: 'assistant', phase: 'final_answer',
+					text: '实时内容', updatedAt: '2026-08-22T10:00:00.000Z'
+				}, {
+					id: 'reasoning-empty', turnId: 'turn-1', kind: 'reasoning',
+					updatedAt: '2026-08-22T10:00:01.000Z'
+				}]
 			};
 		}
 	};
@@ -152,7 +184,13 @@ test('session detail opens from either list and hydrates live agent events', () 
 
 	assert.equal(scope.sessionDetail.visible, true);
 	assert.equal(scope.sessionDetail.live, true);
-	assert.equal(scope.sessionDetail.events[0].text, '实时内容');
+	assert.equal(scope.sessionDetail.transcript[0].summary, '先检查现状');
+	assert.equal(scope.sessionDetail.transcript[1].detailView.output, 'all passed');
+	assert.equal(scope.sessionDetail.transcript[4].hasReasoningContent, false);
+	assert.equal(scope.sessionDetail.turns[0].id, 'turn-1');
+	assert.equal(scope.sessionDetail.outcome.finalResponse.text, '实时内容');
+	assert.equal(scope.sessionDetail.outcome.commandPassed, 1);
+	assert.equal(scope.sessionDetail.outcome.files[0].path, 'src/app.ts');
 	assert.equal(scope.sessionDetail.session.session.provider, 'codex');
 	scope.closeSessionDetail();
 	assert.equal(scope.sessionDetail.visible, false);
@@ -185,6 +223,33 @@ test('session dock opens, toggles, and keyboard-switches the shared drawers', ()
   scope.handleSessionDockKeydown({ key: 'ArrowDown', preventDefault: () => { prevented = true; } }, 'activity');
   assert.equal(prevented, true);
   assert.equal(document.events.at(-1).type, 'agent-session-history-open');
+  scope.destroy();
+});
+
+test('session dock closes on outside clicks without swallowing drawer or tab interactions', () => {
+  const document = createDocument();
+  const { factory } = loadDirective(
+    'webui/ui/directive/agentSessionDock/agentSessionDock.directive.js',
+    'agentSessionDock',
+    { document, window: { setTimeout: (callback) => callback() } },
+  );
+  const scope = createScope();
+  factory().link(scope);
+
+  scope.toggleSessionDrawer('activity');
+  document.dispatchEvent(new FakeCustomEvent('agent-session-drawer-state', {
+    detail: { drawer: 'activity', open: true },
+  }));
+  const surfaceTarget = {
+    nodeType: 1,
+    getAttribute(name) { return name === 'data-agent-control-surface' ? '' : null; },
+    parentNode: document,
+  };
+  document.dispatchEvent({ type: 'click', target: surfaceTarget });
+  assert.equal(document.events.some((event) => event.type === 'agent-activity-close'), false);
+  document.dispatchEvent({ type: 'click', target: { nodeType: 1, getAttribute() { return null; }, parentNode: document } });
+  assert.equal(document.events.at(-1).type, 'agent-activity-close');
+  assert.equal(document.events.at(-1).detail.restoreFocus, false);
   scope.destroy();
 });
 

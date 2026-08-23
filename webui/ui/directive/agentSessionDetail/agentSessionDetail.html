@@ -1,56 +1,159 @@
 <aside id="agent-session-detail-drawer" data-component="agent-session-detail" data-agent-control-surface ng-if="sessionDetail.visible"
-	role="region" tabindex="-1" aria-labelledby="agent-session-detail-title">
+	role="dialog" aria-modal="true" tabindex="-1" aria-labelledby="agent-session-detail-title">
 	<header data-slot="session-detail-header">
-		<div>
+		<div data-slot="session-detail-heading-copy">
+			<div data-slot="session-detail-kicker">{{ sessionDetailSourceLabel() | agentSessionText }}</div>
 			<div id="agent-session-detail-title" data-slot="session-detail-title">{{ 'sessionDetail' | agentSessionText }}</div>
-			<div data-slot="session-detail-source">{{ sessionDetailSourceLabel() | agentSessionText }}</div>
 		</div>
 		<button data-slot="button close-button" type="button" ng-click="closeSessionDetail()"
-			aria-label="{{ 'backToSessions' | agentSessionText }}">{{ 'backToSessions' | agentSessionText }}</button>
+			aria-label="{{ 'close' | agentSessionText }}">×</button>
 	</header>
-	<div data-slot="session-detail-body" role="region" tabindex="0"
-		aria-label="{{ 'realtimeEvents' | agentSessionText }}">
-		<div data-slot="session-detail-heading">
+
+	<section data-slot="session-detail-overview" aria-label="{{ 'sessionOverview' | agentSessionText }}">
+		<div data-slot="session-detail-identity">
 			<div data-slot="session-detail-node">{{ sessionDetail.session.nodeTitle }}</div>
+			<div data-slot="session-detail-provider">
+				{{ sessionDetail.session.session.provider }} ·
+				{{ sessionDetail.session.session.modelId || ('defaultModel' | agentSessionText) }}
+				<span ng-if="sessionDetail.session.session.effort"> · {{ sessionDetail.session.session.effort }}</span>
+			</div>
+		</div>
+		<div data-slot="session-detail-state">
 			<span data-slot="session-detail-status" data-state="{{ sessionDetail.session.status }}">
-				{{ sessionDetail.session.status }}
+				{{ sessionDetail.session.status | agentSessionText }}
 			</span>
+			<span data-slot="live-indicator" ng-if="sessionDetail.live">{{ 'liveUpdating' | agentSessionText }}</span>
 		</div>
-		<div data-slot="session-detail-provider">
-			{{ sessionDetail.session.session.provider }} ·
-			{{ sessionDetail.session.session.modelId || ('defaultModel' | agentSessionText) }}
+		<div data-slot="session-detail-facts">
+			<span>{{ sessionDetail.outcome.turnCount }} {{ 'turns' | agentSessionText }}</span>
+			<span>{{ sessionDetail.session.updatedAt | date:'yyyy-MM-dd HH:mm:ss' }}</span>
+			<span title="{{ sessionDetail.session.executionId }}">ID · {{ sessionDetail.session.executionId }}</span>
 		</div>
-		<dl data-slot="session-detail-metadata">
-			<dt>{{ 'updatedAt' | agentSessionText }}</dt>
-			<dd>{{ sessionDetail.session.updatedAt | date:'yyyy-MM-dd HH:mm:ss' }}</dd>
-			<dt>{{ 'executionId' | agentSessionText }}</dt>
-			<dd>{{ sessionDetail.session.executionId }}</dd>
-			<dt ng-if="sessionDetail.session.session.effort">{{ 'effort' | agentSessionText }}</dt>
-			<dd ng-if="sessionDetail.session.session.effort">{{ sessionDetail.session.session.effort }}</dd>
-		</dl>
-		<div data-slot="session-detail-summary" ng-if="sessionDetail.session.summary">
-			{{ sessionDetail.session.summary }}
+	</section>
+
+	<div data-slot="session-detail-body" role="region" tabindex="0" aria-label="{{ 'sessionTimeline' | agentSessionText }}">
+		<div data-slot="session-detail-loading" ng-if="sessionDetail.loading">
+			<span data-slot="loading-dot" aria-hidden="true"></span>{{ 'loadingSessionDetail' | agentSessionText }}
+		</div>
+		<div data-slot="session-detail-error" ng-if="sessionDetail.loadError">
+			<strong>{{ 'detailUnavailable' | agentSessionText }}</strong>
+			<span>{{ sessionDetail.loadError }}</span>
 		</div>
 		<div data-slot="session-detail-error" ng-if="sessionDetail.session.error">
-			{{ sessionDetail.session.error.code }} · {{ sessionDetail.session.error.message }}
+			<strong>{{ sessionDetail.session.error.code || ('transcriptError' | agentSessionText) }}</strong>
+			<span>{{ sessionDetail.session.error.message || sessionDetail.session.error }}</span>
 		</div>
-		<section data-slot="session-detail-events" aria-label="{{ 'realtimeEvents' | agentSessionText }}">
-			<div data-slot="session-detail-events-header">
-				<span>{{ 'realtimeEvents' | agentSessionText }}</span>
-				<span data-slot="live-indicator" ng-if="sessionDetail.live">{{ 'liveUpdating' | agentSessionText }}</span>
+
+		<section data-slot="session-result" ng-if="sessionDetail.outcome.summary || sessionDetail.outcome.finalResponse || sessionDetail.outcome.deliverables.length || sessionDetail.outcome.validations.length || sessionDetail.outcome.blocker">
+			<header data-slot="section-header">
+				<div>
+					<div data-slot="section-eyebrow">{{ 'sessionOutcome' | agentSessionText }}</div>
+					<h2>{{ 'completedWork' | agentSessionText }}</h2>
+				</div>
+				<div data-slot="result-stats">
+					<span>{{ sessionDetail.outcome.files.length }} {{ 'changedFiles' | agentSessionText }}</span>
+					<span>{{ sessionDetail.outcome.commandPassed }}/{{ sessionDetail.outcome.commandCount }} {{ 'commandsPassed' | agentSessionText }}</span>
+					<span>{{ sessionDetail.outcome.toolCount }} {{ 'toolCalls' | agentSessionText }}</span>
+				</div>
+			</header>
+			<div data-slot="result-summary" ng-if="sessionDetail.outcome.summary">{{ sessionDetail.outcome.summary }}</div>
+			<div data-slot="final-response" ng-if="sessionDetail.outcome.finalResponse">
+				<div data-slot="content-label">{{ 'finalResponse' | agentSessionText }}</div>
+				<div data-slot="rich-text">{{ sessionDetail.outcome.finalResponseText }}</div>
 			</div>
-			<div data-slot="session-detail-empty" ng-if="!sessionDetail.events.length">
-				{{ 'noRealtimeEvents' | agentSessionText }}
+			<div data-slot="result-validations" ng-if="sessionDetail.outcome.validations.length">
+				<div data-slot="content-label">{{ 'validations' | agentSessionText }}</div>
+				<ul>
+					<li ng-repeat="validation in sessionDetail.outcome.validations track by $index" data-state="{{ validation.passed ? 'passed' : 'failed' }}">
+						<span data-slot="validation-state">{{ validation.passed ? '✓' : '×' }}</span>
+						<span>{{ validation.name }}</span>
+						<code ng-if="validation.command">{{ validation.command }}</code>
+						<span data-slot="validation-evidence" ng-if="validation.evidence">{{ validation.evidence }}</span>
+					</li>
+				</ul>
 			</div>
-			<ol data-slot="session-event-list" ng-if="sessionDetail.events.length">
-				<li data-slot="session-event" ng-repeat="event in sessionDetail.events track by event.id">
-					<div data-slot="session-event-meta">
-						<span>{{ event.type }}</span>
-						<time>{{ event.updatedAt | date:'HH:mm:ss' }}</time>
-					</div>
-					<div data-slot="session-event-text">{{ event.text }}</div>
-				</li>
-			</ol>
+			<div data-slot="result-blocker" ng-if="sessionDetail.outcome.blocker">
+				<div data-slot="content-label">{{ 'blocker' | agentSessionText }}</div>
+				<div>{{ sessionDetail.outcome.blocker }}</div>
+			</div>
+			<div data-slot="result-files" ng-if="sessionDetail.outcome.deliverables.length">
+				<div data-slot="content-label">{{ 'deliverables' | agentSessionText }}</div>
+				<ul>
+					<li ng-repeat="artifact in sessionDetail.outcome.deliverables track by artifact.path"><span data-slot="file-kind">{{ artifact.kind }}</span>{{ artifact.path }}</li>
+				</ul>
+			</div>
+		</section>
+
+		<section data-slot="session-timeline" aria-label="{{ 'sessionTimeline' | agentSessionText }}">
+			<header data-slot="section-header">
+				<div>
+					<div data-slot="section-eyebrow">{{ 'fullTrace' | agentSessionText }}</div>
+					<h2>{{ 'sessionTimeline' | agentSessionText }}</h2>
+				</div>
+				<span data-slot="timeline-count">{{ sessionDetail.transcript.length }} {{ 'items' | agentSessionText }}</span>
+			</header>
+			<div data-slot="session-detail-empty" ng-if="!sessionDetail.loading && !sessionDetail.transcript.length">
+				{{ 'noSessionContent' | agentSessionText }}
+			</div>
+			<section data-slot="turn-group" ng-repeat="turn in sessionDetail.turns track by turn.id">
+				<div data-slot="turn-heading">
+					<span>{{ turn.id === 'session' ? ('sessionEvents' | agentSessionText) : (('turn' | agentSessionText) + ' ' + turn.index) }}</span>
+					<code ng-if="turn.id !== 'session'">{{ turn.id }}</code>
+				</div>
+				<ol data-slot="session-event-list">
+					<li data-slot="session-event" data-kind="{{ entry.kind }}" ng-repeat="entry in turn.entries track by entry.id">
+						<div data-slot="timeline-marker" aria-hidden="true"></div>
+						<article data-slot="timeline-card">
+							<header data-slot="session-event-meta">
+								<div data-slot="event-title">
+									<span data-slot="event-kind">{{ entry.labelKey | agentSessionText }}</span>
+									<span data-slot="event-name" ng-if="entry.title">{{ entry.title }}</span>
+								</div>
+								<div data-slot="event-state">
+									<span ng-if="entry.phase">{{ entry.phase === 'final_answer' ? ('finalAnswer' | agentSessionText) : ('commentary' | agentSessionText) }}</span>
+									<span ng-if="entry.status">{{ entry.status | agentSessionText }}</span>
+									<time>{{ entry.updatedAt | date:'HH:mm:ss' }}</time>
+								</div>
+							</header>
+
+							<div data-slot="session-event-text" ng-if="entry.kind !== 'reasoning' && entry.text">{{ entry.text }}</div>
+							<details data-slot="reasoning-detail" ng-if="entry.kind === 'reasoning' && entry.hasReasoningContent">
+								<summary>{{ 'reasoningDisclosure' | agentSessionText }}</summary>
+								<div data-slot="reasoning-note">{{ 'reasoningBoundary' | agentSessionText }}</div>
+								<div data-slot="reasoning-summary" ng-if="entry.summary">
+									<div data-slot="content-label">{{ 'reasoningSummary' | agentSessionText }}</div>
+									<div data-slot="rich-text">{{ entry.summary }}</div>
+								</div>
+								<div data-slot="reasoning-content" ng-if="entry.text">
+									<div data-slot="content-label">{{ 'providerReasoningContent' | agentSessionText }}</div>
+									<div data-slot="rich-text">{{ entry.text }}</div>
+								</div>
+							</details>
+							<div data-slot="reasoning-empty" data-state="{{ entry.status === 'inProgress' ? 'pending' : 'unavailable' }}" ng-if="entry.kind === 'reasoning' && !entry.hasReasoningContent">
+								{{ (entry.status === 'inProgress' ? 'reasoningPending' : 'reasoningUnavailable') | agentSessionText }}
+							</div>
+
+							<div data-slot="technical-detail" ng-if="entry.hasDetail">
+								<div data-slot="command-meta" ng-if="entry.detailView.cwd || entry.detailView.exitCode !== undefined || entry.detailView.durationMs !== undefined">
+									<span ng-if="entry.detailView.cwd">cwd · {{ entry.detailView.cwd }}</span>
+									<span ng-if="entry.detailView.exitCode !== undefined">exit · {{ entry.detailView.exitCode }}</span>
+									<span ng-if="entry.detailView.durationMs !== undefined">{{ entry.detailView.durationMs }} ms</span>
+								</div>
+								<div ng-if="entry.detailView.arguments"><div data-slot="content-label">{{ 'arguments' | agentSessionText }}</div><pre>{{ entry.detailView.arguments }}</pre></div>
+								<div ng-if="entry.detailView.progress"><div data-slot="content-label">{{ 'progress' | agentSessionText }}</div><pre>{{ entry.detailView.progress }}</pre></div>
+								<div ng-if="entry.detailView.output"><div data-slot="content-label">{{ 'commandOutput' | agentSessionText }}</div><pre>{{ entry.detailView.output }}</pre></div>
+								<div ng-if="entry.detailView.result"><div data-slot="content-label">{{ 'toolResult' | agentSessionText }}</div><pre>{{ entry.detailView.result }}</pre></div>
+								<div data-slot="tool-error" ng-if="entry.detailView.error"><div data-slot="content-label">{{ 'transcriptError' | agentSessionText }}</div><pre>{{ entry.detailView.error }}</pre></div>
+								<div data-slot="file-change" ng-repeat="change in entry.detailView.changes track by $index">
+									<div data-slot="file-change-header"><span>{{ change.kind }}</span><code>{{ change.path }}</code></div>
+									<pre ng-if="change.diff">{{ change.diff }}</pre>
+								</div>
+								<div ng-if="entry.detailView.diff"><div data-slot="content-label">{{ 'diff' | agentSessionText }}</div><pre>{{ entry.detailView.diff }}</pre></div>
+							</div>
+						</article>
+					</li>
+				</ol>
+			</section>
 		</section>
 	</div>
 </aside>

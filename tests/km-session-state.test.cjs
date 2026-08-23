@@ -75,18 +75,18 @@ test('km_record_session dry-run is zero-write and actual recording preserves cla
   t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
   const filePath = createMap(tempDir);
   const claim = await claimTodos(filePath, 'worker-1', { nodeIds: ['task-1'] });
-  const before = readKmFile(filePath).root.children[0];
+  const before = (await readKmFile(filePath)).root.children[0];
   const beforeHash = getNodeHash(before);
   const input = sessionInput(filePath, { claimId: claim.claimId });
 
   const dryRun = await recordSession({ ...input, dryRun: true });
   assert.equal(dryRun.dryRun, true);
   assert.equal(fs.existsSync(getSessionStatePath(filePath)), false);
-  assert.equal(readKmFile(filePath).root.children[0].data.infiniteMap, undefined);
+  assert.equal((await readKmFile(filePath)).root.children[0].data.infiniteMap, undefined);
 
   const recorded = await recordSession(input);
   assert.equal(recorded.created, true);
-  const node = readKmFile(filePath).root.children[0];
+  const node = (await readKmFile(filePath)).root.children[0];
   assert.equal(getNodeHash(node), beforeHash);
   assert.equal(node.data.infiniteMap.latestSession.executionId, 'exec-1');
   assert.equal(node.data.hyperlink, 'https://example.com');
@@ -94,7 +94,7 @@ test('km_record_session dry-run is zero-write and actual recording preserves cla
   assert.deepEqual(node.data.resource, ['待拆解']);
 
   await completeClaim(filePath, claim.claimId, ['task-1']);
-  await recordSession({ ...input, status: 'completed', resultRevision: getKmFileRevision(filePath) });
+  await recordSession({ ...input, status: 'completed', resultRevision: await getKmFileRevision(filePath) });
   const page = await listNodeSessions(filePath, 'task-1');
   assert.equal(page.total, 1);
   assert.equal(page.sessions[0].status, 'completed');
@@ -135,7 +135,7 @@ test('session history is idempotent, paginated, recoverable, and marks orphan no
   assert.equal(recovered.sessions[0].executionId, 'exec-2');
   assert.ok(fs.readdirSync(tempDir).some((name) => name.includes('.sessions.json.corrupt-')));
 
-  const doc = readKmFile(filePath);
+  const doc = await readKmFile(filePath);
   doc.root.children = [];
   fs.writeFileSync(filePath, JSON.stringify(doc, null, 2));
   assert.equal((await listNodeSessions(filePath, 'task-1')).orphan, true);
@@ -188,7 +188,7 @@ test('completion and release tools atomically update task and session terminal s
     true,
     { executionId: 'exec-1', summary: 'done' }
   );
-  assert.deepEqual(readKmFile(completedPath).root.children[0].data.resource, ['待拆解']);
+  assert.deepEqual((await readKmFile(completedPath)).root.children[0].data.resource, ['待拆解']);
   assert.equal((await listNodeSessions(completedPath, 'task-1')).sessions[0].status, 'running');
 
   await completeClaim(
@@ -198,7 +198,7 @@ test('completion and release tools atomically update task and session terminal s
     false,
     { executionId: 'exec-1', summary: 'done' }
   );
-  const completedNode = readKmFile(completedPath).root.children[0];
+  const completedNode = (await readKmFile(completedPath)).root.children[0];
   assert.deepEqual(completedNode.data.resource, ['已完成']);
   assert.equal(completedNode.data.infiniteMap.latestSession.status, 'completed');
   assert.equal((await listNodeSessions(completedPath, 'task-1')).sessions[0].summary, 'done');
@@ -212,11 +212,11 @@ test('completion and release tools atomically update task and session terminal s
     failReason: 'provider stopped',
     sessionUpdate: { executionId: 'exec-1' },
   });
-  const failedNode = readKmFile(failedPath).root.children[0];
+  const failedNode = (await readKmFile(failedPath)).root.children[0];
   assert.deepEqual(failedNode.data.resource, ['待拆解']);
   assert.equal(failedNode.data.infiniteMap.latestSession.status, 'failed');
   assert.equal((await listNodeSessions(failedPath, 'task-1')).sessions[0].error.message, 'provider stopped');
-  assert.equal(readExecState(failedPath).tasks['task-1'].state, 'failed');
+  assert.equal((await readExecState(failedPath)).tasks['task-1'].state, 'failed');
 });
 
 test('single-writer and collaboration completion persist session links with generated nodes', async (t) => {
@@ -231,15 +231,15 @@ test('single-writer and collaboration completion persist session links with gene
     todoPath,
     ['task-1'],
     false,
-    getKmFileRevision(todoPath),
+    await getKmFileRevision(todoPath),
     { executionId: 'exec-1' }
   );
-  assert.equal(readKmFile(todoPath).root.children[0].data.infiniteMap.latestSession.status, 'completed');
+  assert.equal((await readKmFile(todoPath)).root.children[0].data.infiniteMap.latestSession.status, 'completed');
 
   const collaborationDir = path.join(tempDir, 'collaboration');
   fs.mkdirSync(collaborationDir);
   const collaborationPath = createMap(collaborationDir, '待协同');
-  const initialRevision = getKmFileRevision(collaborationPath);
+  const initialRevision = await getKmFileRevision(collaborationPath);
   await recordSession(sessionInput(collaborationPath, {
     taskKind: 'collaboration',
     expectedRevision: initialRevision,
@@ -247,12 +247,12 @@ test('single-writer and collaboration completion persist session links with gene
   const expanded = await expandCollaborationTask(
     collaborationPath,
     'task-1',
-    getKmFileRevision(collaborationPath),
+    await getKmFileRevision(collaborationPath),
     ['Child A'],
     false,
     { executionId: 'exec-1' }
   );
-  const expandedNode = readKmFile(collaborationPath).root.children[0];
+  const expandedNode = (await readKmFile(collaborationPath)).root.children[0];
   assert.equal(expandedNode.data.infiniteMap.latestSession.status, 'completed');
   assert.equal(expandedNode.children[0].data.infiniteMap.originExecutionId, 'exec-1');
   assert.deepEqual(
@@ -267,7 +267,7 @@ test('single-writer and collaboration completion persist session links with gene
   await recordSession(sessionInput(claimedPath, {
     taskKind: 'collaboration',
     claimId: lease.claimId,
-    expectedRevision: getKmFileRevision(claimedPath),
+    expectedRevision: await getKmFileRevision(claimedPath),
   }));
   await completeCollaborationClaim(
     claimedPath,
@@ -276,7 +276,7 @@ test('single-writer and collaboration completion persist session links with gene
     false,
     { executionId: 'exec-1' }
   );
-  const claimedNode = readKmFile(claimedPath).root.children[0];
+  const claimedNode = (await readKmFile(claimedPath)).root.children[0];
   assert.equal(claimedNode.data.infiniteMap.latestSession.status, 'completed');
   assert.equal(claimedNode.children[0].data.infiniteMap.originExecutionId, 'exec-1');
 });

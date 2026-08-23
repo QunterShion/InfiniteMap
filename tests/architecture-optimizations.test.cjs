@@ -13,7 +13,7 @@ const { atomicWriteJsonFile } = require('../src/mcp/services/kmFileLock.ts');
 
 const root = path.resolve(__dirname, '..');
 
-test('KM revision cache reuses an unchanged mtime and atomic writes invalidate it', (t) => {
+test('KM revision cache reuses an unchanged mtime and atomic writes invalidate it', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-revision-cache-'));
   const filePath = path.join(directory, 'tasks.km');
   t.after(() => {
@@ -22,21 +22,21 @@ test('KM revision cache reuses an unchanged mtime and atomic writes invalidate i
   });
   fs.writeFileSync(filePath, '{"root":{"data":{"id":"root","text":"one"}}}');
 
-  const originalRead = fs.readFileSync;
+  const originalRead = fs.promises.readFile;
   let reads = 0;
-  fs.readFileSync = function patchedRead(target, ...args) {
+  fs.promises.readFile = async function patchedRead(target, ...args) {
     if (path.resolve(String(target)) === filePath) reads += 1;
     return originalRead.call(this, target, ...args);
   };
   try {
-    const first = getCachedKmFileRevision(filePath);
-    assert.equal(getCachedKmFileRevision(filePath), first);
+    const first = await getCachedKmFileRevision(filePath);
+    assert.equal(await getCachedKmFileRevision(filePath), first);
     assert.equal(reads, 1);
-    atomicWriteJsonFile(filePath, '{"root":{"data":{"id":"root","text":"two"}}}');
-    assert.notEqual(getCachedKmFileRevision(filePath), first);
+    await atomicWriteJsonFile(filePath, '{"root":{"data":{"id":"root","text":"two"}}}');
+    assert.notEqual(await getCachedKmFileRevision(filePath), first);
     assert.equal(reads, 2);
   } finally {
-    fs.readFileSync = originalRead;
+    fs.promises.readFile = originalRead;
   }
 });
 

@@ -546,6 +546,9 @@ test('agent-session UI uses semantic tokens and ships the 21-language union', ()
   const i18n = fs.readFileSync(path.join(root, 'webui/ui/service/agentSessionI18n.service.js'), 'utf8');
   assert.doesNotMatch(styles, /#[0-9a-f]{3,8}|rgba?\(|hsla?\(|\d+(?:\.\d+)?(?:px|rem)/i);
   assert.doesNotMatch(styles, /transition-all/);
+	assert.match(styles, /\.minder-editor-container \{[\s\S]*?color-scheme: light;/);
+	assert.match(styles, /--surface-raised-stronger-non-alpha: Canvas;/);
+	assert.doesNotMatch(styles, /--surface-raised-stronger-non-alpha:\s*var\(--vscode-editorWidget-background/);
   assert.doesNotMatch(composerStyles, /#[0-9a-f]{3,8}|rgba?\(|hsla?\(|\d+(?:\.\d+)?(?:px|rem)/i);
   assert.doesNotMatch(composerStyles, /transition-all/);
 	for (const slot of ['composer-shell', 'instruction-input', 'provider-trigger', 'permission-trigger', 'config-trigger', 'menu-item', 'primary-action-button']) {

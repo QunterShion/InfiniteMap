@@ -59,22 +59,22 @@ test('claim only targets leaf todos and skips parents', async (t) => {
     ], []),
   });
 
-  const leaves = collectLeafTodos(filePath).map((leaf) => leaf.nodeId);
+  const leaves = (await collectLeafTodos(filePath)).map((leaf) => leaf.nodeId);
   assert.deepEqual(leaves, ['leaf-a', 'leaf-b']);
 
   const result = await claimTodos(filePath, 'agent-a');
   assert.ok(result.claimId);
   assert.equal(result.claimedCount, 2);
   assert.deepEqual(result.tasks.map((task) => task.nodeId), ['leaf-a', 'leaf-b']);
-  assert.equal(result.kmRevision, getKmFileRevision(filePath));
+  assert.equal(result.kmRevision, await getKmFileRevision(filePath));
 
-  const execState = readExecState(filePath);
+  const execState = await readExecState(filePath);
   assert.equal(execState.tasks['leaf-a'].state, 'claimed');
   assert.equal(execState.tasks['leaf-a'].workerId, 'agent-a');
   assert.ok(execState.tasks['leaf-a'].baseNodeHash);
   assert.equal(execState.tasks.parent, undefined);
   // 认领不修改 KM 本身
-  assert.deepEqual(listTodos(filePath).map((todo) => todo.nodeId), ['parent', 'leaf-a', 'leaf-b']);
+  assert.deepEqual((await listTodos(filePath)).map((todo) => todo.nodeId), ['parent', 'leaf-a', 'leaf-b']);
 });
 
 test('second worker cannot claim nodes under an active lease', async (t) => {
@@ -101,18 +101,18 @@ test('complete claim marks nodes done atomically and updates sidecar', async (t)
   const dryRun = await completeClaim(filePath, claim.claimId, undefined, true);
   assert.equal(dryRun.dryRun, true);
   assert.equal(dryRun.completedCount, 2);
-  assert.deepEqual(listTodos(filePath).map((todo) => todo.nodeId), ['parent', 'leaf-a', 'leaf-b']);
+  assert.deepEqual((await listTodos(filePath)).map((todo) => todo.nodeId), ['parent', 'leaf-a', 'leaf-b']);
 
   const result = await completeClaim(filePath, claim.claimId);
   assert.equal(result.completedCount, 2);
   assert.equal(result.verified, true);
   assert.notEqual(result.revisionAfter, result.revisionBefore);
 
-  assert.deepEqual(listTodos(filePath).map((todo) => todo.nodeId), ['parent']);
-  const execState = readExecState(filePath);
+  assert.deepEqual((await listTodos(filePath)).map((todo) => todo.nodeId), ['parent']);
+  const execState = await readExecState(filePath);
   assert.equal(execState.tasks['leaf-a'].state, 'done');
   assert.equal(execState.tasks['leaf-a'].completedBy, 'claim');
-  assert.equal(execState.kmRevision, getKmFileRevision(filePath));
+  assert.equal(execState.kmRevision, await getKmFileRevision(filePath));
 });
 
 test('complete claim rejects when node was modified after claiming', async (t) => {
@@ -137,9 +137,9 @@ test('expired lease returns task to pending and blocks completion', async (t) =>
   const claim = await claimTodos(filePath, 'agent-a', { nodeIds: ['leaf-a'] });
 
   // 直接把租约改为过期，模拟执行者崩溃
-  const execState = readExecState(filePath);
+  const execState = await readExecState(filePath);
   execState.tasks['leaf-a'].leaseUntil = new Date(Date.now() - 1000).toISOString();
-  writeExecState(filePath, execState);
+  await writeExecState(filePath, execState);
 
   await assert.rejects(completeClaim(filePath, claim.claimId), /租约已过期/);
   await assert.rejects(
@@ -150,13 +150,13 @@ test('expired lease returns task to pending and blocks completion', async (t) =>
   // 过期后其他执行者可以重新认领
   const reclaimed = await claimTodos(filePath, 'agent-b', { nodeIds: ['leaf-a'] });
   assert.equal(reclaimed.claimedCount, 1);
-  assert.equal(readExecState(filePath).tasks['leaf-a'].workerId, 'agent-b');
+  assert.equal((await readExecState(filePath)).tasks['leaf-a'].workerId, 'agent-b');
 });
 
 test('renew extends lease for the original worker only', async (t) => {
   const filePath = createFixture(t, parentWithTwoLeaves());
   const claim = await claimTodos(filePath, 'agent-a');
-  const leaseBefore = readExecState(filePath).tasks['leaf-a'].leaseUntil;
+  const leaseBefore = (await readExecState(filePath)).tasks['leaf-a'].leaseUntil;
 
   await assert.rejects(
     renewClaim(filePath, claim.claimId, 'agent-b'),
@@ -181,12 +181,12 @@ test('release and fail return tasks to pending for re-claiming', async (t) => {
   });
   assert.equal(failed.state, 'failed');
 
-  const execState = readExecState(filePath);
+  const execState = await readExecState(filePath);
   assert.equal(execState.tasks['leaf-a'].state, 'released');
   assert.equal(execState.tasks['leaf-b'].state, 'failed');
   assert.equal(execState.tasks['leaf-b'].failReason, '输出物验证不通过');
   // KM 节点仍保持待拆解
-  assert.deepEqual(listTodos(filePath).map((todo) => todo.nodeId), ['parent', 'leaf-a', 'leaf-b']);
+  assert.deepEqual((await listTodos(filePath)).map((todo) => todo.nodeId), ['parent', 'leaf-a', 'leaf-b']);
 
   // 释放和失败的任务都可以被重新认领
   const reclaimed = await claimTodos(filePath, 'agent-b');
@@ -206,7 +206,7 @@ test('legacy mark done is blocked for actively claimed nodes', async (t) => {
   await releaseClaim(filePath, claim.claimId);
   const result = await markNodesDone(filePath, ['leaf-a'], false);
   assert.equal(result.modified, 1);
-  const entry = readExecState(filePath).tasks['leaf-a'];
+  const entry = (await readExecState(filePath)).tasks['leaf-a'];
   assert.equal(entry.state, 'done');
   assert.equal(entry.completedBy, 'legacy');
 });
@@ -243,7 +243,7 @@ test('stale lock file is preempted and lock is cleaned after critical section', 
 
 test('claim with stale expectedKmRevision is rejected', async (t) => {
   const filePath = createFixture(t, parentWithTwoLeaves());
-  const staleRevision = getKmFileRevision(filePath);
+  const staleRevision = await getKmFileRevision(filePath);
 
   await markNodesDone(filePath, ['leaf-b'], false);
 
@@ -251,5 +251,6 @@ test('claim with stale expectedKmRevision is rejected', async (t) => {
     claimTodos(filePath, 'agent-a', { expectedKmRevision: staleRevision }),
     /KM 文件版本已变化/
   );
-  assert.equal(fs.existsSync(getExecStatePath(filePath)) && Object.keys(readExecState(filePath).tasks).filter((id) => readExecState(filePath).tasks[id].state === 'claimed').length > 0, false);
+  const execState = await readExecState(filePath);
+  assert.equal(fs.existsSync(getExecStatePath(filePath)) && Object.keys(execState.tasks).filter((id) => execState.tasks[id].state === 'claimed').length > 0, false);
 });

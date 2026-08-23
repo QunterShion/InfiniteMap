@@ -5,8 +5,6 @@
 			<div id="agent-activity-drawer-title" data-slot="activity-title">{{ 'activityOverview' | agentSessionText }}</div>
 			<div data-slot="activity-meta">{{ activity.total }} {{ 'activeSessionsCount' | agentSessionText }}</div>
 		</div>
-		<button data-slot="button close-button" type="button" ng-click="closeAgentActivity()"
-			aria-label="{{ 'close' | agentSessionText }}">{{ 'close' | agentSessionText }}</button>
 	</header>
 	<div data-slot="notice" ng-if="activity.loading">{{ 'loading' | agentSessionText }}</div>
 	<div data-slot="error" ng-if="activity.error">{{ activity.error }}</div>

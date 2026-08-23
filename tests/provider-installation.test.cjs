@@ -1,5 +1,9 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
 const Module = require('node:module');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 class MockEventEmitter {
@@ -41,6 +45,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
 };
 require('ts-node/register/transpile-only');
 const { ProviderComponentRegistry } = require('../src/providers/providerComponentRegistry.ts');
+const { CodexRuntimeInstaller } = require('../src/providers/codexRuntimeInstaller.ts');
 Module._load = originalLoad;
 
 function readyDescriptor() {
@@ -119,4 +124,56 @@ test('an installed Codex Server is verified without downloading or opening Exten
   assert.deepEqual(phases, ['verifying']);
   assert.deepEqual(progressReports, []);
   registry.dispose();
+});
+
+test('managed Codex installation repairs a missing code-mode host with the matching release asset', async (t) => {
+  const storagePath = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-codex-runtime-'));
+  t.after(() => fs.rmSync(storagePath, { recursive: true, force: true }));
+  const codexPayload = Buffer.from('codex-runtime');
+  const hostPayload = Buffer.from('codex-code-mode-host-runtime');
+  const digest = (payload) => crypto.createHash('sha256').update(payload).digest('hex');
+  const downloads = [];
+  const verified = [];
+  const installer = new CodexRuntimeInstaller({
+    storagePath,
+    platform: 'linux',
+    arch: 'x64',
+    asset: {
+      fileName: 'codex-test', sha256: digest(codexPayload), format: 'executable',
+      codeModeHost: {
+        fileName: 'codex-code-mode-host-test', sha256: digest(hostPayload), format: 'executable'
+      }
+    },
+    downloadFile: async (url, destination) => {
+      downloads.push(url);
+      await fs.promises.writeFile(destination, url.endsWith('codex-code-mode-host-test') ? hostPayload : codexPayload);
+    },
+    verifyExecutable: async (executable) => {
+      verified.push(executable);
+      return 'codex-test 0.147.0';
+    },
+    verifyCodeModeHost: async (executable) => {
+      verified.push(executable);
+      return 'codex-code-mode-host';
+    },
+  });
+
+  await fs.promises.mkdir(path.dirname(installer.executablePath), { recursive: true });
+  await fs.promises.writeFile(installer.executablePath, codexPayload);
+  await fs.promises.chmod(installer.executablePath, 0o755);
+  assert.equal(await installer.isInstalled(), false, 'the main binary alone is an incomplete installation');
+
+  const stages = [];
+  await installer.install((stage) => stages.push(stage));
+
+  assert.deepEqual(stages, ['downloading', 'installing']);
+  assert.equal(downloads.length, 2);
+  assert.equal(verified.length, 2);
+  assert.equal(await installer.isInstalled(), true);
+  assert.deepEqual(await fs.promises.readFile(installer.codeModeHostPath), hostPayload);
+  const manifest = JSON.parse(await fs.promises.readFile(
+    path.join(path.dirname(installer.executablePath), 'install.json'), 'utf8'
+  ));
+  assert.equal(manifest.codeModeHostAsset, 'codex-code-mode-host-test');
+  assert.equal(manifest.codeModeHostSha256, digest(hostPayload));
 });

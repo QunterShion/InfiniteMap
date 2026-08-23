@@ -12,6 +12,7 @@ import {
 	SessionConfiguration,
 	SessionMutationInput,
 	SessionSnapshot,
+	SessionTranscriptEntry,
 } from './types';
 
 export interface SessionOrchestratorEvent extends AgentSessionEventPayload {
@@ -29,6 +30,7 @@ interface ActiveDocumentSession {
 	activeTurnId?: string;
 	status: SessionSnapshot['status'];
 	updatedAt: string;
+	transcript: SessionTranscriptEntry[];
 }
 
 export interface StartOrSendInput {
@@ -134,6 +136,7 @@ export class SessionOrchestrator implements vscode.Disposable {
 				activeTurnId: providerSnapshot.activeTurnId,
 				status: providerSnapshot.status,
 				updatedAt: providerSnapshot.updatedAt || input.updatedAt,
+				transcript: providerSnapshot.transcript || [],
 			};
 			this.sessions.set(input.documentKey, active);
 			return this.toSnapshot(active);
@@ -205,6 +208,7 @@ export class SessionOrchestrator implements vscode.Disposable {
 				},
 				status: 'idle',
 				updatedAt: new Date().toISOString(),
+				transcript: [],
 			};
 			this.sessions.set(input.documentKey, active);
 		}
@@ -339,6 +343,21 @@ export class SessionOrchestrator implements vscode.Disposable {
 		return this.toSnapshot(active);
 	}
 
+	public async readSessionDetail(input: {
+		executionId: string;
+		session: AgentSessionRef;
+		workingDirectory: string;
+		mcpServer: { command: string; args: string[] };
+	}): Promise<SessionSnapshot> {
+		const adapter = await this.getAdapter(input.session.provider);
+		return adapter.query({
+			session: input.session,
+			executionId: input.executionId,
+			workingDirectory: input.workingDirectory,
+			mcpServer: input.mcpServer,
+		});
+	}
+
 	public async mutate(
 		documentKey: string,
 		operation: SessionMutationInput['operation'],
@@ -435,6 +454,18 @@ export class SessionOrchestrator implements vscode.Disposable {
 				active.status = 'idle';
 			}
 		}
+		if (event.type === 'session.transcript.updated') {
+			const transcriptPayload = event.payload as { entry?: SessionTranscriptEntry; transcript?: SessionTranscriptEntry[] } | undefined;
+			const entries = transcriptPayload?.transcript || (transcriptPayload?.entry ? [transcriptPayload.entry] : []);
+			for (const entry of entries) {
+				const index = active.transcript.findIndex((candidate) => candidate.id === entry.id);
+				if (index >= 0) {
+					active.transcript[index] = { ...entry };
+				} else {
+					active.transcript.push({ ...entry });
+				}
+			}
+		}
 		active.updatedAt = new Date().toISOString();
 		const sequence = (this.hostSequences.get(active.documentKey) || 0) + 1;
 		this.hostSequences.set(active.documentKey, sequence);
@@ -502,6 +533,7 @@ export class SessionOrchestrator implements vscode.Disposable {
 		active.activeTurnId = snapshot.activeTurnId;
 		active.session = { ...snapshot.session };
 		active.updatedAt = snapshot.updatedAt;
+		active.transcript = (snapshot.transcript || []).map((entry) => ({ ...entry }));
 		active.effectiveConfig = snapshot.effectiveConfig || {
 			modelId: snapshot.session.modelId,
 			effort: snapshot.session.effort,
@@ -525,6 +557,7 @@ export class SessionOrchestrator implements vscode.Disposable {
 			sequence: this.hostSequences.get(active.documentKey) || 0,
 			updatedAt: active.updatedAt,
 			activeTurnId: active.activeTurnId,
+			transcript: active.transcript.map((entry) => ({ ...entry })),
 			requestedConfig: { ...active.requestedConfig },
 			effectiveConfig: { ...active.effectiveConfig },
 		};

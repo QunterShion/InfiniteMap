@@ -21,9 +21,11 @@ import {
 	SessionCapabilities,
 	SessionMutationInput,
 	SessionSnapshot,
+	SessionTranscriptEntry,
 } from '../../sessions/types';
 import { INFINITE_MAP_CONTROL_INSTRUCTIONS } from '../codex/protocol';
 import { ClaudeConfigReader, ClaudeUserConfig } from './ClaudeConfigReader';
+import { claudeMessagesToTranscript } from './ClaudeTranscriptMapper';
 
 const PROVIDER_ID = 'claudecode';
 const EXTENSION_ID = 'chanterxiao.infinite-map';
@@ -42,6 +44,7 @@ interface ClaudeSessionState {
 	activeTurnId?: string;
 	abortController?: AbortController;
 	query?: { close(): void };
+	transcript: SessionTranscriptEntry[];
 }
 
 interface PendingPermission {
@@ -160,6 +163,7 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 			status: 'idle',
 			sequence: 0,
 			updatedAt: new Date().toISOString(),
+			transcript: [],
 		});
 		return session;
 	}
@@ -193,9 +197,11 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 				status: 'idle',
 				sequence: 0,
 				updatedAt: new Date().toISOString(),
+				transcript: [],
 			};
 			this.sessions.set(input.session.sessionId, state);
 		}
+		await this.refreshTranscript(state);
 		return this.snapshot(state);
 	}
 
@@ -297,6 +303,13 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 		state.session.modelId = input.modelId;
 		state.session.effort = input.effort;
 		state.session.permissionModeId = permissionMode.id;
+		this.appendTranscript(state, {
+			id: submissionId,
+			turnId,
+			kind: 'user',
+			text: input.message,
+			updatedAt: new Date().toISOString(),
+		});
 		this.updateState(state, 'running');
 
 		const sdk = await this.loadSdk();
@@ -353,10 +366,22 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 			if (message.type === 'stream_event'
 				&& message.event?.type === 'content_block_delta'
 				&& message.event.delta?.type === 'text_delta') {
+				this.appendAssistantText(state, message.event.delta.text, state.activeTurnId);
 				this.emit(state, 'session.delta', { delta: message.event.delta.text });
 			} else if (message.type === 'assistant') {
 				for (const block of message.message?.content || []) {
 					if (block.type === 'tool_use') {
+						this.appendTranscript(state, {
+							id: block.id || randomUUID(),
+							itemId: block.id,
+							turnId: state.activeTurnId,
+							kind: 'tool',
+							title: block.name || 'Tool',
+							text: typeof block.input === 'string' ? block.input : JSON.stringify(block.input || {}),
+							status: 'requested',
+							detail: block,
+							updatedAt: new Date().toISOString(),
+						});
 						this.emit(state, 'session.tool.started', { name: block.name, toolUseId: block.id });
 					}
 				}
@@ -368,6 +393,7 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 				state.session.turnId = undefined;
 				state.query = undefined;
 				state.abortController = undefined;
+				await this.refreshTranscript(state);
 				this.updateState(state, 'idle');
 				this.emit(state, 'session.completed', { status: 'idle', receipt: message.structured_output });
 			}
@@ -598,6 +624,43 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 		}
 	}
 
+	private async refreshTranscript(state: ClaudeSessionState): Promise<void> {
+		try {
+			const messages = await (await this.loadSdk()).getSessionMessages(state.session.sessionId, {
+				dir: state.workingDirectory,
+				includeSystemMessages: true,
+			});
+			if (messages.length > 0) {
+				state.transcript = claudeMessagesToTranscript(messages);
+			}
+		} catch {
+			// Missing/rotated transcripts are valid for newly created sessions.
+		}
+	}
+
+	private appendTranscript(state: ClaudeSessionState, entry: SessionTranscriptEntry): void {
+		const index = state.transcript.findIndex((candidate) => candidate.id === entry.id);
+		if (index >= 0) {
+			state.transcript[index] = { ...state.transcript[index], ...entry };
+		} else {
+			state.transcript.push(entry);
+		}
+		this.emit(state, 'session.transcript.updated', { transcript: state.transcript });
+	}
+
+	private appendAssistantText(state: ClaudeSessionState, text: string, turnId?: string): void {
+		const id = `live-assistant:${turnId || 'session'}`;
+		const current = state.transcript.find((entry) => entry.id === id);
+		this.appendTranscript(state, {
+			id,
+			turnId,
+			kind: 'assistant',
+			text: `${current?.text || ''}${text}`,
+			phase: 'final_answer',
+			updatedAt: new Date().toISOString(),
+		});
+	}
+
 	private snapshot(state: ClaudeSessionState): SessionSnapshot {
 		return {
 			executionId: state.executionId,
@@ -606,6 +669,7 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 			sequence: state.sequence,
 			updatedAt: state.updatedAt,
 			activeTurnId: state.activeTurnId,
+			transcript: state.transcript,
 			effectiveConfig: {
 				modelId: state.session.modelId,
 				effort: state.session.effort,

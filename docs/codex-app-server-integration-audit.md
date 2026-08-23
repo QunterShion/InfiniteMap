@@ -2,9 +2,9 @@
 
 > 审计日期：2026-08-23  
 > 运行时基线：`codex-cli 0.149.0-alpha.4.1`  
-> 结论：InfiniteMap 当前直接集成 **32 个 JSON-RPC 方法**，其中客户端请求 14 个、客户端通知 1 个、服务端请求 5 个、服务端通知 12 个。
+> 结论：InfiniteMap 当前直接集成 **39 个 JSON-RPC 方法**，其中客户端请求 14 个、客户端通知 1 个、服务端请求 5 个、服务端通知 19 个。
 
-这里的“32 个”是 InfiniteMap 实际调用或消费的方法数，不是 Codex App Server 的全部协议方法数。App Server 还生成了文件系统、进程、插件、Apps、环境、实时语音等大量协议；这些不属于 InfiniteMap 智能体会话控制边界，不能为了追求数量全部接入。
+这里的“39 个”是 InfiniteMap 实际调用或消费的方法数，不是 Codex App Server 的全部协议方法数。App Server 还生成了文件系统、进程、插件、Apps、环境、实时语音等大量协议；这些不属于 InfiniteMap 智能体会话控制边界，不能为了追求数量全部接入。
 
 ## 1. 最终结论
 
@@ -38,7 +38,7 @@ interface AgentExecutionReceipt {
 }
 ```
 
-## 2. 32 个已集成方法
+## 2. 39 个已集成方法
 
 ### 2.1 Client Request：14 个
 
@@ -52,7 +52,7 @@ interface AgentExecutionReceipt {
 | 6 | `configRequirements/read` | 读取管理员约束并过滤权限选项 | 完整 |
 | 7 | `thread/start` | 创建新会话并注入 MCP、控制指令和权限 | 完整 |
 | 8 | `thread/resume` | 仅恢复已持久化且当前未加载的旧会话 | 完整 |
-| 9 | `thread/read` | 查询、恢复和错误对账 | 完整 |
+| 9 | `thread/read` | 查询、恢复、错误对账，并用 `includeTurns: true` 恢复完整 transcript | 完整 |
 | 10 | `thread/name/set` | 首个 Turn 后尽力更新名称 | 完整，非阻塞 |
 | 11 | `thread/archive` | 归档 Provider Thread | 完整 |
 | 12 | `turn/start` | 启动 Turn，携带 trace 与 strict `outputSchema` | 完整 |
@@ -77,7 +77,7 @@ interface AgentExecutionReceipt {
 
 当前 0.149 生成 Schema 的真实方法名是 `item/tool/requestUserInput`。旧的 `tool/requestUserInput` 不再作为兼容别名注册，避免把协议漂移静默隐藏。
 
-### 2.4 Server Notification：12 个
+### 2.4 Server Notification：19 个
 
 | # | 方法 | 用途 | 当前状态 |
 | ---: | --- | --- | --- |
@@ -85,14 +85,21 @@ interface AgentExecutionReceipt {
 | 22 | `thread/status/changed` | 映射 active/idle/notLoaded/systemError | 完整 |
 | 23 | `item/agentMessage/delta` | 流式输出智能体文本 | 完整 |
 | 24 | `item/commandExecution/outputDelta` | 流式输出命令结果 | 完整 |
-| 25 | `item/started` | 工具/Item 开始事件 | 完整 |
-| 26 | `item/completed` | 工具/Item 完成事件 | 完整 |
-| 27 | `turn/diff/updated` | 更新本轮变更事件 | 完整，统一事件模型 |
-| 28 | `model/rerouted` | 更新实际使用模型 | 完整 |
-| 29 | `turn/completed` | 收敛 Turn 状态并结束活动态 | 完整 |
-| 30 | `error` | 保留真实错误、上游详情与 `willRetry` | 完整 |
-| 31 | `serverRequest/resolved` | 清除已被 App Server 自动取消的过期审批 | 完整 |
-| 32 | `account/login/completed` | 匹配 `loginId` 后结束登录等待并刷新运行时 | 完整 |
+| 25 | `item/fileChange/outputDelta` | 流式保留文件变更输出 | 完整 |
+| 26 | `item/fileChange/patchUpdated` | 实时更新文件路径、类型与 diff | 完整 |
+| 27 | `item/mcpToolCall/progress` | 实时展示 MCP 工具执行进度 | 完整 |
+| 28 | `item/reasoning/summaryTextDelta` | 流式展示 Provider 开放的思考摘要 | 完整 |
+| 29 | `item/reasoning/summaryPartAdded` | 建立新的思考摘要分段 | 完整 |
+| 30 | `item/reasoning/textDelta` | 展示 Provider 开放的 reasoning content | 完整 |
+| 31 | `item/started` | 按 ThreadItem 类型建立 transcript 项 | 完整 |
+| 32 | `item/completed` | 用权威完整 Item 覆盖流式临时项 | 完整 |
+| 33 | `turn/diff/updated` | 更新本轮聚合 diff | 完整 |
+| 34 | `turn/plan/updated` | 实时更新执行计划与状态 | 完整 |
+| 35 | `model/rerouted` | 更新实际使用模型 | 完整 |
+| 36 | `turn/completed` | 收敛 Turn 状态、完整 Items 与最终响应 | 完整 |
+| 37 | `error` | 保留真实错误、上游详情与 `willRetry` | 完整 |
+| 38 | `serverRequest/resolved` | 清除已被 App Server 自动取消的过期审批 | 完整 |
+| 39 | `account/login/completed` | 匹配 `loginId` 后结束登录等待并刷新运行时 | 完整 |
 
 ## 3. Stable 与实验字段边界
 
@@ -118,7 +125,7 @@ codex app-server generate-json-schema --experimental
 | 缺陷 | 旧行为 | 修复后 |
 | --- | --- | --- |
 | strict output schema | `command`、`evidence`、`blocker` 可省略 | 全部 required；无值时为 `null` |
-| Schema 使用方式 | 生成后只缓存，不检查 | 启动前检查 32 个方法、关键请求字段及 5 类回执 |
+| Schema 使用方式 | 生成后只缓存，不检查 | 启动前检查 39 个方法、关键请求字段及 5 类回执 |
 | 损坏缓存 | 目标目录已存在时可能继续读旧缓存 | 临时目录先验证，再替换旧缓存；多窗口等待锁释放 |
 | 实验能力 | 请求字段与握手/生成面可能不一致 | 握手和 Schema 都固定启用实验表面 |
 | 新线程生命周期 | 创建后立即 resume，可能没有 rollout | 新线程不 resume；只有旧会话恢复时 resume |
@@ -129,6 +136,8 @@ codex app-server generate-json-schema --experimental
 | 权限发现异常 | 所有错误都静默降级 | 只有 `-32601`/method unavailable 降级，其余错误透出 |
 | 登录 | 未接官方 App Server 登录流程 | start → 打开 authUrl → 匹配 completed → 刷新 runtime |
 | 原始错误 | `thread/read` 对账错误可能覆盖首次错误 | 对账仅尽力执行，始终保留原始 Turn 错误 |
+| 会话详情 | 完整 Item 被压成“工具开始/完成” | Provider-neutral transcript 保留响应、思考摘要、计划、命令、diff、MCP、审批和错误 |
+| 历史明细 | `thread/read` 只用于状态对账 | 点击历史记录后按 executionId 回查对应 Provider Thread 的 turns/items |
 
 ## 5. 有意不集成的协议
 
@@ -138,7 +147,7 @@ codex app-server generate-json-schema --experimental
 | --- | --- |
 | `thread/list`、`thread/turns/list`、`thread/items/list` | 活动/历史页签以 InfiniteMap 创建并记录的智能体会话旁车为事实来源，不导入用户全部 Codex 历史 |
 | `thread/fork`、goal、metadata、rollback/revert | 当前产品没有对应交互和数据模型 |
-| reasoning/raw response delta | 不展示模型内部推理或原始上游响应 |
+| raw response item | 不展示未经产品化的原始上游响应；reasoning 仅展示 App Server 明确开放的摘要与内容，不声称是隐藏思维链 |
 | `process/*`、`fs/*`、`command/exec*` | 会绕开 Agent 工具权限和 InfiniteMap MCP 业务边界 |
 | plugin/app/marketplace/skills 管理 | 属于 Codex 平台管理，不属于会话控制条 |
 | MCP 状态/资源/工具直调 | MCP 状态只在节点信息卡展示；会话页签不承担 MCP 控制面 |
@@ -162,6 +171,6 @@ node --test --test-concurrency=1 \
 npm run build
 ```
 
-Codex 定向测试覆盖：握手与分页、32 方法清单、实验字段、strict Schema 递归约束、5 类服务端回执、过期审批清理、登录、未登录降级、新线程首轮、steer trace、no-rollout 对账、状态/错误通知和权限策略。
+Codex 定向测试覆盖：握手与分页、39 方法清单、实验字段、strict Schema 递归约束、5 类服务端回执、过期审批清理、登录、未登录降级、新线程首轮、steer trace、no-rollout 对账、状态/错误通知、权限策略、完整历史 Item 映射，以及流式 reasoning/response 合并与完成态覆盖。
 
 参考：OpenAI Codex App Server 文档与当前运行时 `generate-json-schema --experimental` 产物。运行时 Schema 是具体版本协议兼容性的最终依据。

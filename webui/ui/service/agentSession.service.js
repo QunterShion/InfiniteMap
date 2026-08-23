@@ -20,7 +20,18 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 
 			function copyLiveDetail(detail) {
 				if (!detail) return null;
-				return Object.assign({}, detail, { events: (detail.events || []).slice() });
+				return Object.assign({}, detail, {
+					events: (detail.events || []).slice(),
+					transcript: (detail.transcript || []).map(function(entry) { return Object.assign({}, entry); })
+				});
+			}
+
+			function upsertTranscript(detail, entry) {
+				if (!entry || !entry.id) return;
+				detail.transcript = detail.transcript || [];
+				var index = detail.transcript.findIndex(function(candidate) { return candidate.id === entry.id; });
+				if (index >= 0) detail.transcript[index] = Object.assign({}, entry);
+				else detail.transcript.push(Object.assign({}, entry));
 			}
 
 			function rememberLiveSnapshot(raw, nodeId) {
@@ -28,7 +39,8 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 				if (!session || !session.executionId) return null;
 				var detail = liveSessionDetails[session.executionId] || {
 					executionId: session.executionId,
-					events: []
+					events: [],
+					transcript: []
 				};
 				detail.status = session.status || detail.status;
 				detail.session = session.session || detail.session;
@@ -39,6 +51,7 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 				detail.effectiveConfig = session.effectiveConfig || detail.effectiveConfig;
 				detail.nodeId = nodeId || session.nodeId || detail.nodeId || null;
 				detail.title = session.title || detail.title || null;
+				(session.transcript || []).forEach(function(entry) { upsertTranscript(detail, entry); });
 				if (!liveSessionDetails[session.executionId]) {
 					liveSessionOrder.unshift(session.executionId);
 				}
@@ -103,6 +116,10 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 						: 'completed';
 					detail.activeTurnId = null;
 				}
+				if (message.type === 'session.transcript.updated') {
+					if (payload.entry) upsertTranscript(detail, payload.entry);
+					(payload.transcript || []).forEach(function(entry) { upsertTranscript(detail, entry); });
+				}
 				var error = eventError(payload);
 				if (error) {
 					detail.error = {
@@ -113,7 +130,7 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 					detail.error = null;
 				}
 				var text = eventText(message);
-				if (text) {
+				if (text && message.type !== 'session.transcript.updated') {
 					var last = detail.events[detail.events.length - 1];
 					if (message.type === 'session.delta' && last && last.type === 'session.delta') {
 						last.text += text;
@@ -158,7 +175,7 @@ angular.module('kityminderEditor').factory('agentSessionService', [
                 $rootScope.$evalAsync();
 			} else if (message.command === 'agentSessionEvent') {
 				var liveDetail = rememberLiveEvent(message);
-                if (message.type === 'session.delta') {
+				if (message.type === 'session.delta' || message.type === 'session.transcript.updated') {
                     // FE-P1-01：delta 高频到达时合并到下一帧，每帧仅触发一次$digest
                     pendingDelta = message;
                     if (!deltaRafScheduled) {
@@ -222,6 +239,8 @@ angular.module('kityminderEditor').factory('agentSessionService', [
                 activeTurnId:    raw.activeTurnId   != null ? raw.activeTurnId   : (raw.active_turn_id   != null ? raw.active_turn_id   : null),
 				requestedConfig: raw.requestedConfig || raw.requested_config     || null,
 				effectiveConfig: raw.effectiveConfig || raw.effective_config     || null,
+				transcript:      raw.transcript      || [],
+				degradations:    raw.degradations    || [],
 				error:           raw.error          || null,
 				nodeId:          raw.nodeId        || raw.node_id        || null,
 				title:           raw.title         || null,
@@ -290,6 +309,9 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 			},
 			querySession: function() {
 				return request('querySession');
+			},
+			querySessionDetail: function(executionId, nodeId) {
+				return request('querySessionDetail', { executionId: executionId, nodeId: nodeId });
 			},
 			resolveInput: function(requestId, decision, value) {
 				return request('resolveInput', {

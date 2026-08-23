@@ -44,7 +44,7 @@ test('marks a selected parent and its selected descendants in one batch', async 
   const result = await markNodesDone(filePath, nodeIds, false);
   assert.equal(result.modified, 3);
   assert.equal(result.verified, true);
-  assert.deepEqual(listTodos(filePath).map((todo) => todo.nodeId), ['root']);
+  assert.deepEqual((await listTodos(filePath)).map((todo) => todo.nodeId), ['root']);
 
   const persisted = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   const parent = persisted.root.children[0];
@@ -61,14 +61,14 @@ test('list todos returns kmRevision matching the current file content', async (t
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   fs.writeFileSync(filePath, JSON.stringify(document), 'utf8');
 
-  const todoList = listTodosWithRevision(filePath);
+  const todoList = await listTodosWithRevision(filePath);
   assert.equal(todoList.todoCount, 2);
   assert.deepEqual(todoList.todos.map((todo) => todo.nodeId), ['root', 'leaf']);
-  assert.equal(todoList.kmRevision, getKmFileRevision(filePath));
+  assert.equal(todoList.kmRevision, await getKmFileRevision(filePath));
 
   // 文件内容变化后版本必须变化
   await markNodesDone(filePath, ['leaf'], false);
-  assert.notEqual(listTodosWithRevision(filePath).kmRevision, todoList.kmRevision);
+  assert.notEqual((await listTodosWithRevision(filePath)).kmRevision, todoList.kmRevision);
 });
 
 test('mark done with matching expectedRevision succeeds and returns new revision', async (t) => {
@@ -79,13 +79,13 @@ test('mark done with matching expectedRevision succeeds and returns new revision
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   fs.writeFileSync(filePath, JSON.stringify(document), 'utf8');
 
-  const { kmRevision } = listTodosWithRevision(filePath);
+  const { kmRevision } = await listTodosWithRevision(filePath);
   const result = await markNodesDone(filePath, ['leaf'], false, kmRevision);
   assert.equal(result.modified, 1);
   assert.equal(result.verified, true);
   assert.equal(result.revisionBefore, kmRevision);
   assert.notEqual(result.revisionAfter, kmRevision);
-  assert.equal(result.revisionAfter, getKmFileRevision(filePath));
+  assert.equal(result.revisionAfter, await getKmFileRevision(filePath));
 });
 
 test('mark done with stale expectedRevision is rejected without writing', async (t) => {
@@ -96,7 +96,7 @@ test('mark done with stale expectedRevision is rejected without writing', async 
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   fs.writeFileSync(filePath, JSON.stringify(document), 'utf8');
 
-  const { kmRevision: staleRevision } = listTodosWithRevision(filePath);
+  const { kmRevision: staleRevision } = await listTodosWithRevision(filePath);
 
   // 模拟并发写入者先完成 leaf-a，文件版本随之变化
   await markNodesDone(filePath, ['leaf-a'], false);
@@ -108,7 +108,7 @@ test('mark done with stale expectedRevision is rejected without writing', async 
   );
   // 冲突拒绝时不得写入任何内容
   assert.equal(fs.readFileSync(filePath, 'utf8'), contentAfterConcurrent);
-  assert.deepEqual(listTodos(filePath).map((todo) => todo.nodeId), ['root', 'leaf-b']);
+  assert.deepEqual((await listTodos(filePath)).map((todo) => todo.nodeId), ['root', 'leaf-b']);
 });
 
 test('mark done without expectedRevision keeps legacy behavior', async (t) => {

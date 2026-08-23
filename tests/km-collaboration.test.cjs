@@ -46,25 +46,25 @@ function createFixture(t) {
   return filePath;
 }
 
-test('rereads the current file when listing collaboration tasks', (t) => {
+test('rereads the current file when listing collaboration tasks', async (t) => {
   const filePath = createFixture(t);
-  const first = listCollaborationTasks(filePath);
+  const first = await listCollaborationTasks(filePath);
   assert.equal(first.taskCount, 1);
   assert.equal(first.tasks[0].path, 'root > section > target');
 
-  const document = readKmFile(filePath);
+  const document = await readKmFile(filePath);
   document.root.children[0].children[2].data.resource = [COLLABORATION];
   fs.writeFileSync(filePath, JSON.stringify(document, null, 2), 'utf8');
 
-  const second = listCollaborationTasks(filePath);
+  const second = await listCollaborationTasks(filePath);
   assert.equal(second.taskCount, 2);
   assert.notEqual(second.fileRevision, first.fileRevision);
   assert.deepEqual(second.tasks.map((task) => task.nodeId), ['target', 'after']);
 });
 
-test('returns root path, subtree, and bounded sibling context', (t) => {
+test('returns root path, subtree, and bounded sibling context', async (t) => {
   const filePath = createFixture(t);
-  const context = getCollaborationContext(filePath, 'target', 1);
+  const context = await getCollaborationContext(filePath, 'target', 1);
 
   assert.equal(context.nodePath, 'root > section > target');
   assert.deepEqual(context.ancestors.map((node) => node.nodeId), ['root', 'section']);
@@ -76,7 +76,7 @@ test('returns root path, subtree, and bounded sibling context', (t) => {
 
 test('dry-runs then appends unlabeled children and completes the parent', async (t) => {
   const filePath = createFixture(t);
-  const context = getCollaborationContext(filePath, 'target');
+  const context = await getCollaborationContext(filePath, 'target');
   const before = fs.readFileSync(filePath, 'utf8');
 
   const dryRun = await expandCollaborationTask(
@@ -99,10 +99,10 @@ test('dry-runs then appends unlabeled children and completes the parent', async 
   assert.equal(result.verified, true);
   assert.equal(result.parentCompleted, true);
   assert.notEqual(result.revisionAfter, result.revisionBefore);
-  assert.equal(listCollaborationTasks(filePath).taskCount, 0);
-  assert.equal(validateKmFile(filePath).valid, true);
+  assert.equal((await listCollaborationTasks(filePath)).taskCount, 0);
+  assert.equal((await validateKmFile(filePath)).valid, true);
 
-  const document = readKmFile(filePath);
+  const document = await readKmFile(filePath);
   const target = document.root.children[0].children[1];
   assert.deepEqual(target.data.resource, [DONE]);
   assert.deepEqual(
@@ -116,8 +116,8 @@ test('dry-runs then appends unlabeled children and completes the parent', async 
 
 test('rejects collaboration writes based on a stale file revision', async (t) => {
   const filePath = createFixture(t);
-  const context = getCollaborationContext(filePath, 'target');
-  const document = readKmFile(filePath);
+  const context = await getCollaborationContext(filePath, 'target');
+  const document = await readKmFile(filePath);
   document.root.data.text = 'changed root';
   fs.writeFileSync(filePath, JSON.stringify(document, null, 2), 'utf8');
 
@@ -132,7 +132,7 @@ test('rejects collaboration writes based on a stale file revision', async (t) =>
     /KM \u6587\u4ef6\u7248\u672c\u5df2\u53d8\u5316/
   );
 
-  const target = readKmFile(filePath).root.children[0].children[1];
+  const target = (await readKmFile(filePath)).root.children[0].children[1];
   assert.equal(target.children.length, 1);
   assert.deepEqual(target.data.resource, [COLLABORATION]);
 });

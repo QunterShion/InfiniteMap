@@ -141,6 +141,47 @@ test('session history is idempotent, paginated, recoverable, and marks orphan no
   assert.equal((await listNodeSessions(filePath, 'task-1')).orphan, true);
 });
 
+test('host can persist an unbound session before an agent claims a KM node', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-host-session-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const filePath = createMap(tempDir);
+  const input = {
+    filePath,
+    executionId: 'host-exec-1',
+    status: 'running',
+    workerId: 'infinite-map-host:test',
+    session: {
+      provider: 'codex',
+      sessionId: 'host-thread-1',
+      surface: 'app-server',
+      openUri: 'vscode://chanterxiao.infinite-map/session/open?v=1&executionId=host-exec-1&map=tasks.km',
+    },
+  };
+
+  await assert.rejects(
+    recordSession({ ...input, workerId: 'agent-worker' }),
+    /只能由扩展宿主创建或更新/
+  );
+
+  const dryRun = await recordSession({ ...input, dryRun: true });
+  assert.equal(dryRun.dryRun, true);
+  assert.equal(dryRun.nodeId, null);
+  assert.equal(fs.existsSync(getSessionStatePath(filePath)), false);
+
+  const recorded = await recordSession(input);
+  assert.equal(recorded.created, true);
+  assert.equal(recorded.nodeId, null);
+  const page = await listFileSessions(filePath);
+  assert.equal(page.total, 1);
+  assert.equal(page.sessions[0].executionId, 'host-exec-1');
+  assert.equal(page.sessions[0].nodeId, undefined);
+
+  await recordSession({ ...input, status: 'idle' });
+  const updated = await listFileSessions(filePath);
+  assert.equal(updated.total, 1);
+  assert.equal(updated.sessions[0].status, 'idle');
+});
+
 test('session recording rejects claim impersonation, unsafe links, and stale collaboration context', async (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-session-security-'));
   t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));

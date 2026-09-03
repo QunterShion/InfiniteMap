@@ -1,12 +1,12 @@
 .node-card {
 	position: absolute;
-	right: ~"calc(var(--spacing) * 3)";
+	right: ~"calc(var(--spacing) * 14)";
 	bottom: ~"calc(var(--spacing) * 3)";
 	z-index: 2;
 
 	[data-component="node-card-panel"] {
 		box-sizing: border-box;
-		width: ~"min(36ch, calc(100vw - var(--spacing) * 6))";
+		width: ~"min(36ch, calc(100vw - var(--spacing) * 17))";
 		padding: ~"calc(var(--spacing) * 2)" ~"calc(var(--spacing) * 3)";
 		color: var(--text-base);
 		background: var(--surface-raised-stronger-non-alpha);
@@ -18,7 +18,7 @@
 	}
 
 	[data-slot="node-title"] {
-		margin-bottom: ~"calc(var(--spacing) * 2)";
+		margin-bottom: var(--spacing);
 		padding-bottom: ~"calc(var(--spacing) * 2)";
 		overflow: hidden;
 		color: var(--text-strong);
@@ -26,6 +26,64 @@
 		font-weight: 600;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	[data-slot="node-breadcrumbs"] {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0 var(--spacing);
+		margin-bottom: ~"calc(var(--spacing) * 2)";
+		color: var(--text-weak);
+		line-height: 150%;
+	}
+
+	[data-slot="breadcrumb-item"] {
+		display: inline-flex;
+		max-width: 100%;
+		align-items: baseline;
+		gap: var(--spacing);
+	}
+
+	[data-slot="breadcrumb-link"],
+	[data-slot="breadcrumb-current"],
+	[data-slot="focus-action"] {
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
+	[data-slot="breadcrumb-link"],
+	[data-slot="focus-action"] {
+		padding: 0;
+		color: var(--vscode-textLink-foreground, LinkText);
+		background: transparent;
+		border: 0;
+		font: inherit;
+		text-decoration: none;
+		cursor: pointer;
+	}
+
+	[data-slot="breadcrumb-link"]:hover,
+	[data-slot="focus-action"]:hover { text-decoration: underline; }
+	[data-slot="breadcrumb-current"] { color: var(--text-base); }
+	[data-slot="focus-action"] { margin-inline-start: ~"calc(var(--spacing) * 2)"; }
+
+	[data-component="node-focus-return"] {
+		position: fixed;
+		top: ~"calc(var(--minder-canvas-top) + var(--spacing) * 3)";
+		right: ~"calc(var(--spacing) * 3)";
+		padding: var(--spacing) ~"calc(var(--spacing) * 3)";
+		color: var(--text-base);
+		background: var(--surface-raised-stronger-non-alpha);
+		border: thin solid var(--border-weak-base);
+		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-md);
+		font: inherit;
+		cursor: pointer;
+	}
+
+	[data-component="node-focus-return"]:hover {
+		color: var(--text-strong);
+		border-color: var(--vscode-focusBorder, var(--border-weak-base));
 	}
 
 	[data-slot~="node-row"] { display: flex; line-height: 150%; }

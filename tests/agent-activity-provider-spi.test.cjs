@@ -15,6 +15,9 @@ test('activity and history expose agent sessions without MCP lease state', () =>
   const editor = read('webui/ui/directive/kityminderEditor/kityminderEditor.html');
 
   assert.match(coordinator, /\.\.\.\(request\.nodeId \? \{ nodeId: request\.nodeId \} : \{\}\)/);
+  assert.match(coordinator, /preflightKm\(document\)/);
+  assert.match(coordinator, /queueSessionPersistence\(documentKey, snapshot\)/);
+  assert.match(coordinator, /km_record_session/);
   assert.match(service, /queryActivityPage/);
 	assert.match(service, /listLiveAgentSessions/);
 	assert.match(service, /getLiveSessionDetail/);

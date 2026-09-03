@@ -1,5 +1,23 @@
+<button type="button" data-component="node-focus-return" ng-if="focused"
+        ng-click="exitFocus()"
+        aria-label="{{ 'backToFullMap' | agentSessionText }}">
+    {{ 'backToFullMap' | agentSessionText }}
+</button>
 <div data-component="node-card-panel" ng-show="visible">
     <div data-slot="node-title" title="{{ card.text }}">{{ card.text }}</div>
+    <nav data-slot="node-breadcrumbs" aria-label="{{ 'nodePath' | agentSessionText }}">
+        <span data-slot="breadcrumb-item"
+              ng-repeat="breadcrumb in card.breadcrumbs track by $index">
+            <button type="button" data-slot="breadcrumb-link"
+                    ng-if="!breadcrumb.isCurrent"
+                    ng-click="centerBreadcrumb(breadcrumb.nodeId)">
+                {{ breadcrumb.text }}
+            </button>
+            <span data-slot="breadcrumb-current" ng-if="breadcrumb.isCurrent"
+                  aria-current="page">{{ breadcrumb.text }}</span>
+            <span data-slot="breadcrumb-separator" ng-if="!$last" aria-hidden="true">›</span>
+        </span>
+    </nav>
     <div data-slot="node-row">
         <span data-slot="node-label">{{ 'createdAt' | agentSessionText }}</span>
         <span data-slot="node-value">{{ card.created }}</span>
@@ -9,12 +27,12 @@
         <span data-slot="node-value">{{ card.nodeId }}</span>
     </div>
     <div data-slot="node-row">
-        <span data-slot="node-label">{{ 'level' | agentSessionText }}</span>
-        <span data-slot="node-value">{{ card.level }}</span>
-    </div>
-    <div data-slot="node-row">
         <span data-slot="node-label">{{ 'childCount' | agentSessionText }}</span>
-        <span data-slot="node-value">{{ card.childCount }}</span>
+        <span data-slot="node-value">
+            {{ card.childCount }}
+            <button type="button" data-slot="focus-action" ng-if="card.canFocus && !card.isCurrentFocus"
+                    ng-click="focusNode()">{{ 'focus' | agentSessionText }}</button>
+        </span>
     </div>
     <div data-slot="node-row" ng-if="card.resources.length">
         <span data-slot="node-label">{{ 'tags' | agentSessionText }}</span>

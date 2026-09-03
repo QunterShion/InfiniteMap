@@ -42,8 +42,8 @@ export interface SessionArtifact {
 
 export interface NodeExecutionRecord {
   executionId: string;
-  nodeId: string;
-  taskKind: KmTaskKind;
+  nodeId?: string;
+  taskKind?: KmTaskKind;
   status: NodeExecutionStatus;
   session: SessionReference;
   requestedConfig?: { modelId?: string; effort?: string };
@@ -75,9 +75,9 @@ export interface SessionState {
 
 export interface RecordSessionInput {
   filePath: string;
-  nodeId: string;
+  nodeId?: string;
   executionId: string;
-  taskKind: KmTaskKind;
+  taskKind?: KmTaskKind;
   status: NodeExecutionStatus;
   session: SessionReference;
   workerId: string;
@@ -99,7 +99,7 @@ export interface RecordSessionInput {
 export interface RecordSessionResult {
   filePath: string;
   executionId: string;
-  nodeId: string;
+  nodeId: string | null;
   dryRun: boolean;
   created: boolean;
   status: NodeExecutionStatus;
@@ -249,6 +249,9 @@ export async function prepareTerminalSessionUpdate(
     throw new Error(`未找到 executionId 对应的会话记录: ${update.executionId}`);
   }
 	const nodeId = update.nodeId || record.nodeId;
+	if (!nodeId || !record.taskKind) {
+		throw new Error(`executionId 尚未绑定到 KM 任务节点: ${update.executionId}`);
+	}
   if (record.nodeId !== nodeId) {
     throw new Error(`executionId 与目标节点不匹配: ${update.executionId}`);
   }
@@ -303,65 +306,81 @@ async function recordSessionLocked(resolved: string, input: RecordSessionInput):
     throw new Error('待协同会话启动记录必须携带最新 expectedRevision');
   }
 
-  const doc = await readKmFile(resolved);
-  const node = findNode(doc.root, input.nodeId);
-  if (!node) {
-    throw new Error(`未找到节点 ID: ${input.nodeId}`);
-  }
-  assertTaskKind(node, input.taskKind, input.status);
-  await assertClaimBinding(resolved, input);
-
   const state = await readSessionState(resolved);
   const existing = state.executions[input.executionId];
-  if (existing) {
-    if (existing.nodeId !== input.nodeId || existing.taskKind !== input.taskKind
-      || existing.session.provider !== input.session.provider
-      || existing.session.sessionId !== input.session.sessionId) {
-      throw new Error('executionId 已绑定到不同的节点或 Provider 会话');
-    }
+  if (!input.nodeId && !isHostWorker(input.workerId)) {
+    throw new Error('未绑定节点的会话记录只能由扩展宿主创建或更新');
   }
+  if (existing) {
+		if ((existing.nodeId && input.nodeId && existing.nodeId !== input.nodeId)
+			|| (existing.taskKind && input.taskKind && existing.taskKind !== input.taskKind)
+			|| existing.session.provider !== input.session.provider
+			|| existing.session.sessionId !== input.session.sessionId) {
+			throw new Error('executionId 已绑定到不同的节点或 Provider 会话');
+		}
+  }
+	const nodeId = input.nodeId || existing?.nodeId;
+	let doc: KmDocument | undefined;
+	let node: KmNode | null = null;
+	if (input.nodeId) {
+		if (!input.taskKind) {
+			throw new Error('绑定 KM 任务节点时必须提供 taskKind');
+		}
+		doc = await readKmFile(resolved);
+		node = findNode(doc.root, input.nodeId);
+		if (!node) {
+			throw new Error(`未找到节点 ID: ${input.nodeId}`);
+		}
+		assertTaskKind(node, input.taskKind, input.status);
+		await assertClaimBinding(resolved, input);
+	}
 
   const now = new Date().toISOString();
   const record = buildRecord(input, existing, revisionBefore, now);
-  const index = state.nodeIndex[input.nodeId] || [];
+	const index = nodeId ? state.nodeIndex[nodeId] || [] : [];
   const uniqueIndex = [input.executionId, ...index.filter((id) => id !== input.executionId)];
   state.executions[input.executionId] = record;
-  state.nodeIndex[input.nodeId] = uniqueIndex;
+	if (nodeId) {
+		state.nodeIndex[nodeId] = uniqueIndex;
+	}
 
   if (input.dryRun) {
     return {
       filePath: resolved,
       executionId: input.executionId,
-      nodeId: input.nodeId,
+			nodeId: nodeId || null,
       dryRun: true,
       created: !existing,
-      status: input.status,
-      historyCount: uniqueIndex.length,
+	      status: record.status,
+			historyCount: nodeId ? uniqueIndex.length : 0,
       revisionBefore,
       revisionAfter: revisionBefore,
     };
   }
 
-  const latest = node.data.infiniteMap?.latestSession;
-  if (!latest || latest.executionId === input.executionId
-    || Date.parse(record.startedAt) >= Date.parse(latest.startedAt)) {
-    node.data.infiniteMap = {
-      ...(node.data.infiniteMap || {}),
-      schemaVersion: 1,
-      latestSession: toLatestSession(record),
-      sessionHistoryCount: uniqueIndex.length,
-    };
-  } else {
-    node.data.infiniteMap = {
-      ...(node.data.infiniteMap || {}),
-      schemaVersion: 1,
-      sessionHistoryCount: uniqueIndex.length,
-    };
-  }
+	let revisionAfter = revisionBefore;
+	if (node && doc && record.nodeId && record.taskKind) {
+		const latest = node.data.infiniteMap?.latestSession;
+		if (!latest || latest.executionId === input.executionId
+			|| Date.parse(record.startedAt) >= Date.parse(latest.startedAt)) {
+			node.data.infiniteMap = {
+				...(node.data.infiniteMap || {}),
+				schemaVersion: 1,
+				latestSession: toLatestSession(record),
+				sessionHistoryCount: uniqueIndex.length,
+			};
+		} else {
+			node.data.infiniteMap = {
+				...(node.data.infiniteMap || {}),
+				schemaVersion: 1,
+				sessionHistoryCount: uniqueIndex.length,
+			};
+		}
 
-  // The KM reference is written first. If the sidecar update fails, it can be rebuilt from this node field.
-  await atomicWriteJsonFile(resolved, JSON.stringify(doc, null, 4));
-  const revisionAfter = await getKmFileRevision(resolved);
+		// The KM reference is written first. If the sidecar update fails, it can be rebuilt from this node field.
+		await atomicWriteJsonFile(resolved, JSON.stringify(doc, null, 4));
+		revisionAfter = await getKmFileRevision(resolved);
+	}
   state.kmRevision = revisionAfter;
   record.resultRevision = input.resultRevision || record.resultRevision;
   await writeSessionState(resolved, state);
@@ -369,11 +388,11 @@ async function recordSessionLocked(resolved: string, input: RecordSessionInput):
   return {
     filePath: resolved,
     executionId: input.executionId,
-    nodeId: input.nodeId,
+		nodeId: nodeId || null,
     dryRun: false,
     created: !existing,
-    status: input.status,
-    historyCount: uniqueIndex.length,
+		status: record.status,
+		historyCount: nodeId ? uniqueIndex.length : 0,
     revisionBefore,
     revisionAfter,
   };
@@ -386,39 +405,47 @@ function buildRecord(
   now: string
 ): NodeExecutionRecord {
   const startedAt = existing?.startedAt || normalizeDate(input.startedAt, 'startedAt') || now;
+	const preserveTerminalStatus = Boolean(
+		existing && isTerminalStatus(existing.status) && !isTerminalStatus(input.status)
+	);
   return {
     executionId: input.executionId,
-    nodeId: input.nodeId,
-    taskKind: input.taskKind,
-    status: input.status,
+		...(input.nodeId || existing?.nodeId ? { nodeId: input.nodeId || existing?.nodeId } : {}),
+		...(input.taskKind || existing?.taskKind ? { taskKind: input.taskKind || existing?.taskKind } : {}),
+		status: preserveTerminalStatus ? existing!.status : input.status,
     session: { ...input.session },
     requestedConfig: input.requestedConfig || existing?.requestedConfig,
     effectiveConfig: input.effectiveConfig || existing?.effectiveConfig,
-    degradations: input.degradations || existing?.degradations,
-    workerId: input.workerId,
-    claimId: input.claimId || existing?.claimId,
+		degradations: input.degradations || existing?.degradations,
+		workerId: input.nodeId ? input.workerId : existing?.workerId || input.workerId,
+		claimId: input.nodeId ? input.claimId || existing?.claimId : existing?.claimId || input.claimId,
     inputRevision: existing?.inputRevision || input.inputRevision || revisionBefore,
     resultRevision: input.resultRevision || existing?.resultRevision,
     startedAt,
     updatedAt: now,
-    completedAt: isTerminalStatus(input.status) ? now : undefined,
-    summary: input.summary,
-    artifacts: input.artifacts,
-    generatedNodeIds: input.generatedNodeIds,
-    error: input.error,
+		completedAt: isTerminalStatus(preserveTerminalStatus ? existing!.status : input.status)
+			? existing?.completedAt || now
+			: undefined,
+		summary: input.summary === undefined ? existing?.summary : input.summary,
+		artifacts: input.artifacts === undefined ? existing?.artifacts : input.artifacts,
+		generatedNodeIds: input.generatedNodeIds === undefined ? existing?.generatedNodeIds : input.generatedNodeIds,
+		error: input.error === undefined ? existing?.error : input.error,
   };
 }
 
 function validateRecordInput(input: RecordSessionInput): void {
   requiredText(input.filePath, 'filePath', 4096);
-  requiredText(input.nodeId, 'nodeId', 256);
+	if (input.nodeId) requiredText(input.nodeId, 'nodeId', 256);
   requiredText(input.executionId, 'executionId', 256);
   requiredText(input.workerId, 'workerId', 256);
   requiredText(input.session.provider, 'session.provider', 128);
   requiredText(input.session.sessionId, 'session.sessionId', 512);
-  validateOpenUri(input.session.openUri, input.executionId, input.nodeId);
-  if (!['breakdown', 'collaboration'].includes(input.taskKind)) {
-    throw new Error(`不支持的 taskKind: ${input.taskKind}`);
+	validateOpenUri(input.session.openUri, input.executionId, input.nodeId);
+	if (Boolean(input.nodeId) !== Boolean(input.taskKind)) {
+		throw new Error('nodeId 与 taskKind 必须同时提供或同时省略');
+	}
+	if (input.taskKind && !['breakdown', 'collaboration'].includes(input.taskKind)) {
+		throw new Error(`不支持的 taskKind: ${input.taskKind}`);
   }
   if (input.summary && input.summary.length > 4096) {
     throw new Error('summary 超过 4096 字符限制');
@@ -431,7 +458,7 @@ function validateRecordInput(input: RecordSessionInput): void {
   }
 }
 
-function validateOpenUri(openUri: string, executionId: string, nodeId: string): void {
+function validateOpenUri(openUri: string, executionId: string, nodeId?: string): void {
   const value = requiredText(openUri, 'session.openUri', 4096);
   let uri: URL;
   try {
@@ -443,8 +470,9 @@ function validateOpenUri(openUri: string, executionId: string, nodeId: string): 
     || uri.pathname !== '/session/open') {
     throw new Error('session.openUri 不是允许的 InfiniteMap Deep Link');
   }
-  if (uri.searchParams.get('executionId') !== executionId || uri.searchParams.get('nodeId') !== nodeId) {
-    throw new Error('session.openUri 的 executionId/nodeId 与记录不匹配');
+	if (uri.searchParams.get('executionId') !== executionId
+		|| (nodeId && uri.searchParams.get('nodeId') !== nodeId)) {
+		throw new Error('session.openUri 的 executionId 或已绑定 nodeId 与记录不匹配');
   }
   const mapHint = uri.searchParams.get('map');
   if (mapHint && (path.isAbsolute(mapHint) || mapHint.split(/[\\/]/).includes('..'))) {
@@ -469,7 +497,8 @@ function assertTaskKind(node: KmNode, taskKind: KmTaskKind, status: NodeExecutio
 }
 
 async function assertClaimBinding(resolved: string, input: RecordSessionInput): Promise<void> {
-  const entry = await readExecEntry(resolved, input.nodeId);
+	if (!input.nodeId) return;
+	const entry = await readExecEntry(resolved, input.nodeId);
   const leaseActive = Boolean(entry && entry.state === 'claimed' && Date.parse(entry.leaseUntil) > Date.now());
   if (leaseActive && input.claimId !== entry!.claimId) {
     throw new Error(`节点存在活动租约，claimId 不匹配: ${input.nodeId}`);
@@ -558,7 +587,7 @@ function emptyState(kmRevision: string): SessionState {
 function toLatestSession(record: NodeExecutionRecord): KmLatestSession {
   return {
     executionId: record.executionId,
-    taskKind: record.taskKind,
+    taskKind: record.taskKind!,
     provider: record.session.provider,
     sessionId: record.session.sessionId,
     surface: record.session.surface,
@@ -605,6 +634,10 @@ function requiredText(value: string, name: string, maxLength: number): string {
   if (!normalized) throw new Error(`${name} 不能为空`);
   if (normalized.length > maxLength) throw new Error(`${name} 超过长度限制 ${maxLength}`);
   return normalized;
+}
+
+function isHostWorker(workerId: string): boolean {
+	return workerId.trim().startsWith('infinite-map-host:');
 }
 
 function normalizeDate(value: string | undefined, name: string): string | undefined {

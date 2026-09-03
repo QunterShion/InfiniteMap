@@ -433,6 +433,8 @@ export const INFINITE_MAP_CONTROL_INSTRUCTIONS = [
 	'Apply the InfiniteMap KM requirement breakdown and collaboration rules to the supplied .km path.',
 	'Use only the InfiniteMap MCP tools for every .km read, search, validation, claim, and write.',
 	'Discover both breakdown and collaboration tasks using the latest revisions and lease protocol.',
+	'The Extension Host may already have run read-only KM preflight and persisted an unbound session; treat that as an observability aid, not as task completion or a substitute for rereading before writes.',
+	'If a host-persisted execution has no node binding yet, bind the same executionId only after selecting and claiming the real node; never invent taskKind or bypass claim validation.',
 	'Dry-run every write, perform it, then validate and list both task kinds again.',
 	'Only associate session trace metadata with the supplied executionId; it does not change task semantics.',
 	'After a real claim, replace or append the openUri nodeId query parameter with the claimed nodeId before calling km_record_session.',

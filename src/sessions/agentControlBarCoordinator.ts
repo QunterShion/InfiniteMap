@@ -6,7 +6,7 @@ import { ProviderComponentRegistry } from '../providers/providerComponentRegistr
 import { buildUserTurn } from './buildUserTurn';
 import { AgentSessionRequest, AgentSessionResult } from './protocol';
 import { SessionOrchestrator } from './sessionOrchestrator';
-import { AGENT_SESSION_PROTOCOL_VERSION, AgentSessionErrorCode } from './types';
+import { AGENT_SESSION_PROTOCOL_VERSION, AgentSessionErrorCode, SessionSnapshot } from './types';
 
 const MAX_INPUT_LENGTH = 64 * 1024;
 
@@ -17,6 +17,8 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 	private readonly orchestrator: SessionOrchestrator;
 	private readonly panels = new Map<string, vscode.WebviewPanel>();
 	private readonly panelOwners = new Map<string, vscode.CustomDocument>();
+	private readonly sessionPersistQueues = new Map<string, Promise<void>>();
+	private readonly sessionWorkerId = `infinite-map-host:${process.pid}`;
 	private readonly eventSubscription: vscode.Disposable;
 	private readonly providerChangeSubscription: vscode.Disposable; // Main-P1-02
 
@@ -48,6 +50,10 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 				type: event.type,
 				payload: event.payload,
 			});
+			const snapshot = this.orchestrator.getSnapshot(event.documentKey);
+			if (snapshot && (event.type === 'session.state.changed' || event.type === 'session.completed')) {
+				void this.queueSessionPersistence(event.documentKey, snapshot).catch(() => undefined);
+			}
 		});
 		// Main-P1-02：订阅 provider 状态变更，将最新 provider 列表广播到所有已注册 Webview
 		this.providerChangeSubscription = this.providers.onDidChange(() => {
@@ -246,6 +252,7 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 				}
 				case 'send': {
 					this.assertSendableDocument(document, documentState);
+					await this.preflightKm(document);
 					const providerId = this.requireProviderId(request);
 					const modelId = this.requireModelId(request);
 					const workspace = this.requireTrustedWorkspace(document);
@@ -263,11 +270,13 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 						permissionModeId: request.permissionModeId,
 						idempotencyKey: request.idempotencyKey || request.requestId,
 					});
+					await this.queueSessionPersistence(documentKey, snapshot);
 					response = this.success(request, { session: snapshot });
 					break;
 				}
 				case 'append': {
 					this.assertSendableDocument(document, documentState);
+					await this.preflightKm(document);
 					const providerId = this.requireProviderId(request);
 					const modelId = this.requireModelId(request);
 					const workspace = this.requireTrustedWorkspace(document);
@@ -286,13 +295,16 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 						idempotencyKey: request.idempotencyKey || request.requestId,
 						expectedTurnId: request.expectedTurnId,
 					});
+					await this.queueSessionPersistence(documentKey, snapshot);
 					response = this.success(request, { session: snapshot });
 					break;
 				}
 				case 'interrupt':
-					response = this.success(request, {
-						session: await this.orchestrator.interrupt(documentKey, request.expectedTurnId),
-					});
+					{
+						const session = await this.orchestrator.interrupt(documentKey, request.expectedTurnId);
+						await this.queueSessionPersistence(documentKey, session);
+						response = this.success(request, { session });
+					}
 					break;
 					case 'querySession':
 						response = this.success(request, { session: await this.orchestrator.query(documentKey) });
@@ -452,6 +464,82 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 		} catch (error) {
 			throw this.error('MCP_UNAVAILABLE', error instanceof Error ? error.message : String(error), true);
 		}
+	}
+
+	/**
+	 * Run the cheap, host-owned KM gate before starting a Provider turn. The
+	 * Provider still receives the authoritative path and must reread the file
+	 * before any business write; this gate only prevents starting against an
+	 * invalid/unreadable map and makes task discovery available without spending
+	 * a model turn on the four invariant MCP calls.
+	 */
+	private async preflightKm(document: vscode.CustomDocument): Promise<void> {
+		await this.callKmTool(document, 'km_validate', { filePath: document.uri.fsPath });
+		await Promise.all([
+			this.callKmTool(document, 'km_read', { filePath: document.uri.fsPath }),
+			this.callKmTool(document, 'km_list_todos', { filePath: document.uri.fsPath }),
+			this.callKmTool(document, 'km_list_collaboration_tasks', { filePath: document.uri.fsPath }),
+		]);
+	}
+
+	private queueSessionPersistence(documentKey: string, snapshot: SessionSnapshot): Promise<void> {
+		const document = this.panelOwners.get(documentKey);
+		if (!document) {
+			return Promise.resolve();
+		}
+		const previous = this.sessionPersistQueues.get(snapshot.executionId) || Promise.resolve();
+		const next = previous
+			.catch(() => undefined)
+			.then(() => this.persistSessionSnapshot(document, snapshot));
+		this.sessionPersistQueues.set(snapshot.executionId, next);
+		void next.finally(() => {
+			if (this.sessionPersistQueues.get(snapshot.executionId) === next) {
+				this.sessionPersistQueues.delete(snapshot.executionId);
+			}
+		}).catch(() => undefined);
+		return next;
+	}
+
+	private async persistSessionSnapshot(
+		document: vscode.CustomDocument,
+		snapshot: SessionSnapshot
+	): Promise<void> {
+		const session = snapshot.session;
+		const base = {
+			filePath: document.uri.fsPath,
+			executionId: snapshot.executionId,
+			status: snapshot.status,
+			session: {
+				provider: session.provider,
+				sessionId: session.sessionId,
+				threadId: session.threadId,
+				turnId: session.turnId,
+				surface: session.surface,
+				modelId: session.modelId,
+				effort: session.effort,
+				openUri: session.openUri,
+			},
+			workerId: this.sessionWorkerId,
+			requestedConfig: this.sessionConfig(snapshot.requestedConfig),
+			effectiveConfig: this.sessionConfig(snapshot.effectiveConfig),
+		};
+		// km_record_session intentionally accepts an unbound execution during the
+		// host lifecycle. A later agent claim binds the same executionId to a real
+		// node atomically; the host never guesses task kind or bypasses a lease.
+		await this.callKmTool(document, 'km_record_session', { ...base, dryRun: true });
+		await this.callKmTool(document, 'km_record_session', base);
+	}
+
+	private sessionConfig(
+		config?: { modelId?: string; effort?: string; permissionModeId?: string }
+	): { modelId?: string; effort?: string } | undefined {
+		if (!config) {
+			return undefined;
+		}
+		return {
+			...(config.modelId ? { modelId: config.modelId } : {}),
+			...(config.effort ? { effort: config.effort } : {}),
+		};
 	}
 
 	private getKmClient(document: vscode.CustomDocument): KmMcpClient {

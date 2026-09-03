@@ -9,6 +9,34 @@ angular.module('kityminderEditor')
 			},
 			link: function(scope, element, attributes) {
 				var $minderEditor = element.children('.minder-editor')[0];
+				var canvasResizeObserver;
+
+				function syncCanvasBoundary() {
+					if (!element[0] || !element[0].getBoundingClientRect ||
+						!$minderEditor || !$minderEditor.getBoundingClientRect) return;
+					var containerRect = element[0].getBoundingClientRect();
+					var editorRect = $minderEditor.getBoundingClientRect();
+					var canvasTop = Math.max(0, editorRect.top - containerRect.top);
+					element[0].style.setProperty('--minder-canvas-top', canvasTop + 'px');
+				}
+
+				if (window.ResizeObserver) {
+					canvasResizeObserver = new window.ResizeObserver(syncCanvasBoundary);
+					canvasResizeObserver.observe($minderEditor);
+				} else if (window.addEventListener) {
+					window.addEventListener('resize', syncCanvasBoundary);
+				}
+				var scheduleCanvasSync = window.requestAnimationFrame || window.setTimeout;
+				if (scheduleCanvasSync) scheduleCanvasSync(syncCanvasBoundary);
+
+				if (scope.$on) {
+					scope.$on('$destroy', function() {
+						if (canvasResizeObserver) canvasResizeObserver.disconnect();
+						if (window.removeEventListener) {
+							window.removeEventListener('resize', syncCanvasBoundary);
+						}
+					});
+				}
 
 				function installModifierWheelZoom(minder) {
 					var accumulatedDelta = 0;

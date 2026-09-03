@@ -44,5 +44,5 @@ test('node card exposes read-only task and trace slots', () => {
   assert.match(template, /data-slot="node-row task-state"/);
   assert.match(template, /data-component="node-card-session-trace"/);
   assert.match(template, /data-slot="latest-session-placeholder"/);
-  assert.doesNotMatch(template, /<button|<select|<textarea|<input/i);
+	assert.doesNotMatch(template, /<select|<textarea|<input/i);
 });

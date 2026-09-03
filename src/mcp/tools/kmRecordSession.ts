@@ -8,9 +8,9 @@ export const kmRecordSessionTool = {
     type: 'object',
     properties: {
       filePath: { type: 'string', description: 'KM 文件绝对路径' },
-      nodeId: { type: 'string', description: '实际发现或认领的任务节点 ID' },
+      nodeId: { type: 'string', description: '实际发现或认领的任务节点 ID；宿主预注册阶段可省略' },
       executionId: { type: 'string', description: '控制条内部 trace context 提供的 executionId' },
-      taskKind: { type: 'string', enum: ['breakdown', 'collaboration'] },
+      taskKind: { type: 'string', enum: ['breakdown', 'collaboration'], description: '绑定节点时必填；宿主预注册阶段可省略' },
       status: {
         type: 'string',
         enum: [
@@ -86,7 +86,7 @@ export const kmRecordSessionTool = {
       dryRun: { type: 'boolean', description: '只校验和预览，不写文件' },
     },
     required: [
-      'filePath', 'nodeId', 'executionId', 'taskKind', 'status', 'session', 'workerId',
+      'filePath', 'executionId', 'status', 'session', 'workerId',
     ],
   },
 };

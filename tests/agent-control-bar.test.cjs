@@ -38,7 +38,7 @@ test('agent controls live only in the bottom control bar', () => {
 	assert.match(control, /aria-live="polite"/);
 	assert.match(control, /role="progressbar"/);
 	assert.doesNotMatch(control, /<progress\b/i);
-  assert.doesNotMatch(card, /<button|<select|<textarea|<input/i);
+  assert.doesNotMatch(card, /<select|<textarea|<input/i);
 });
 
 test('KM MCP connection state exposes localized recovery status and a manual reconnect action', () => {

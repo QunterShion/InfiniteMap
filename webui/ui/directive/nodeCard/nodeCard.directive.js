@@ -12,10 +12,20 @@ angular.module('kityminderEditor')
                 minder: '='
             },
             link: function(scope) {
-                var minder = scope.minder;
+				var minder = scope.minder;
+				// Keep every focus level so Return can pop one level at a time.
+				var focusStack = [];
+				var expandedNodeOverrides = [];
+				var pendingCameraHandler = null;
+				var pendingCameraTimer = null;
 
                 scope.visible = false;
-                scope.card = {};
+				scope.focused = false;
+				scope.card = {};
+
+				function getFocusedRoot() {
+					return focusStack.length ? focusStack[focusStack.length - 1] : null;
+				}
 
                 function pad(n) {
                     return n < 10 ? '0' + n : '' + n;
@@ -103,6 +113,201 @@ angular.module('kityminderEditor')
 					};
 				}
 
+				function getNodeId(node) {
+					return node && node.data && node.data.id;
+				}
+
+				function getBreadcrumbs(node) {
+					var breadcrumbs = [];
+					var current = node;
+					while (current) {
+						breadcrumbs.unshift({
+							nodeId: getNodeId(current) || '',
+							text: (current.data && current.data.text) || '—',
+							isCurrent: current === node
+						});
+						current = current.getParent ? current.getParent() : current.parent;
+					}
+					return breadcrumbs;
+				}
+
+				function findNode(nodeId) {
+					var node = minder.getNodeById && minder.getNodeById(nodeId);
+					if (node) return node;
+
+					minder.getRoot().traverse(function(candidate) {
+						if (!node && getNodeId(candidate) === nodeId) node = candidate;
+					});
+					return node;
+				}
+
+				function isInFocusedTree(node) {
+					var focusedRoot = getFocusedRoot();
+					return !focusedRoot || focusedRoot === node || focusedRoot.isAncestorOf(node);
+				}
+
+				function updateNodeVisibility(node) {
+					var focusedRoot = getFocusedRoot();
+					var visible = isInFocusedTree(node);
+					var container = node.getRenderContainer && node.getRenderContainer();
+					var connection = node.getConnection && node.getConnection();
+
+					if (container && container.setVisible) container.setVisible(visible);
+					if (!connection || !connection.setVisible) return;
+
+					if (!visible || node === focusedRoot) {
+						connection.setVisible(false);
+					} else if (minder.updateConnect) {
+						minder.updateConnect(node);
+					} else {
+						connection.setVisible(true);
+					}
+				}
+
+				function applyFocusVisibility(event) {
+					if (!getFocusedRoot()) return;
+					if (event && event.type === 'nodeattach' && event.node) {
+						event.node.traverse(overrideExpandedState);
+					}
+					if (event && event.node) {
+						updateNodeVisibility(event.node);
+						return;
+					}
+					minder.getRoot().traverse(updateNodeVisibility);
+				}
+
+				function shouldForceExpanded(node) {
+					var focusedRoot = getFocusedRoot();
+					return focusedRoot && (
+						node === focusedRoot ||
+						node.isAncestorOf(focusedRoot) ||
+						focusedRoot.isAncestorOf(node)
+					);
+				}
+
+				function overrideExpandedState(node) {
+					var alreadyOverridden = expandedNodeOverrides.some(function(entry) {
+						return entry.node === node;
+					});
+					if (alreadyOverridden || !node.isExpanded) return;
+
+					var ownsMethod = Object.prototype.hasOwnProperty.call(node, 'isExpanded');
+					var originalMethod = node.isExpanded;
+					expandedNodeOverrides.push({
+						node: node,
+						ownsMethod: ownsMethod,
+						method: originalMethod
+					});
+					node.isExpanded = function() {
+						return shouldForceExpanded(node) || originalMethod.call(node);
+					};
+				}
+
+				function forceFocusedTreeExpanded() {
+					minder.getRoot().traverse(overrideExpandedState);
+				}
+
+				function restoreExpandedMethods() {
+					expandedNodeOverrides.forEach(function(entry) {
+						if (entry.ownsMethod) {
+							entry.node.isExpanded = entry.method;
+						} else {
+							delete entry.node.isExpanded;
+						}
+					});
+					expandedNodeOverrides = [];
+				}
+
+				function restoreFullMapVisibility() {
+					minder.getRoot().traverse(function(node) {
+						var visible = !node.parent || node.parent.isExpanded();
+						var container = node.getRenderContainer && node.getRenderContainer();
+						if (container && container.setVisible) container.setVisible(visible);
+						if (minder.updateConnect && node.getConnection && node.getConnection()) {
+							minder.updateConnect(node);
+						}
+					});
+				}
+
+				function cancelPendingCamera() {
+					if (pendingCameraHandler) {
+						minder.off('layoutallfinish', pendingCameraHandler);
+						pendingCameraHandler = null;
+					}
+					if (pendingCameraTimer) {
+						window.clearTimeout(pendingCameraTimer);
+						pendingCameraTimer = null;
+					}
+				}
+
+				function centerNodeInCanvas(node) {
+					var paper = minder.getPaper && minder.getPaper();
+					var dragger = minder.getViewDragger && minder.getViewDragger();
+					var container = node && node.getRenderContainer && node.getRenderContainer();
+					if (!paper || !dragger || !container || !container.getRenderBox) {
+						minder.execCommand('camera', node);
+						return;
+					}
+
+					var viewport = paper.getViewPort();
+					var box = container.getRenderBox('view');
+					dragger.move({
+						x: viewport.center.x - box.x - box.width / 2,
+						y: viewport.center.y - box.y - box.height / 2
+					}, 0);
+				}
+
+				function centerAfterLayout(node) {
+					cancelPendingCamera();
+					pendingCameraHandler = function() {
+						minder.off('layoutallfinish', pendingCameraHandler);
+						pendingCameraHandler = null;
+						// Run after layout listeners finish so their view animations cannot replace this camera move.
+						pendingCameraTimer = window.setTimeout(function() {
+							pendingCameraTimer = null;
+							centerNodeInCanvas(node);
+							refresh();
+						}, 0);
+					};
+					minder.on('layoutallfinish', pendingCameraHandler);
+				}
+
+				function renderFocusedView(centerNode) {
+					if (!getFocusedRoot()) return;
+					restoreExpandedMethods();
+					scope.focused = true;
+					forceFocusedTreeExpanded();
+					minder.getRoot().renderTree();
+					if (centerNode) centerAfterLayout(centerNode);
+					minder.layout();
+					applyFocusVisibility();
+					refresh();
+				}
+
+				function clearFocus(centerFullMap) {
+					if (!focusStack.length && !scope.focused) return;
+
+					focusStack = [];
+					scope.focused = false;
+					restoreExpandedMethods();
+					minder.getRoot().renderTree();
+					if (centerFullMap !== false) centerAfterLayout(minder.getRoot());
+					minder.layout();
+					restoreFullMapVisibility();
+					refresh();
+				}
+
+				function leaveFocus() {
+					if (!focusStack.length) return;
+
+					focusStack.pop();
+					if (focusStack.length) {
+						renderFocusedView(getFocusedRoot());
+					} else {
+						clearFocus(true);
+					}
+				}
+
                 function refresh() {
                     var nodes = minder.getSelectedNodes();
                     var node = nodes.length ? nodes[nodes.length - 1] : null;
@@ -122,8 +327,12 @@ angular.module('kityminderEditor')
                         text: data.text || '',
                         created: formatTime(data.created),
                         nodeId: data.id || '—',
-                        level: node.getLevel(),
                         childCount: (node.children || []).length,
+						breadcrumbs: getBreadcrumbs(node),
+						isFocused: !!getFocusedRoot(),
+						focusDepth: focusStack.length,
+						canFocus: (node.children || []).length > 0,
+						isCurrentFocus: getFocusedRoot() === node,
 						resources: resources,
 						task: task,
 						exec: task.exec,
@@ -142,22 +351,65 @@ angular.module('kityminderEditor')
 
                 minder.on('selectionchange', applyRefresh);
 
-                // 选中状态下节点文本、标签等内容变化时同步刷新卡片
-                minder.on('contentchange', function() {
+				// 选中状态下节点文本、标签等内容变化时同步刷新卡片
+				function handleContentChange() {
+					if (focusStack.some(function(focusedRoot) {
+						return !minder.getRoot().contains(focusedRoot);
+					})) {
+						clearFocus(false);
+					}
                     if (!scope.visible) return;
                     applyRefresh();
-                });
+					applyFocusVisibility();
+				}
+				minder.on('contentchange', handleContentChange);
+				minder.on('nodeattach noderender layoutapply layoutfinish', applyFocusVisibility);
 
                 // 旁车执行状态推送到达时刷新卡片中的执行信息
-                document.addEventListener('km-exec-state', function() {
+				function handleExecState() {
                     if (!scope.visible) return;
                     applyRefresh();
-                });
+				}
+				document.addEventListener('km-exec-state', handleExecState);
 
-				document.addEventListener('km-execution-availability', function() {
+				function handleExecutionAvailability() {
 					if (!scope.visible) return;
 					applyRefresh();
-				});
+				}
+				document.addEventListener('km-execution-availability', handleExecutionAvailability);
+
+				scope.focusNode = function() {
+					var nodes = minder.getSelectedNodes();
+					var node = nodes.length ? nodes[nodes.length - 1] : null;
+					if (!node) return;
+
+					if (getFocusedRoot() === node) {
+						centerNodeInCanvas(node);
+						refresh();
+						return;
+					}
+					focusStack.push(node);
+					renderFocusedView(node);
+					minder.select(node, true);
+					refresh();
+				};
+
+				scope.exitFocus = function() {
+					leaveFocus();
+				};
+
+				scope.centerBreadcrumb = function(nodeId) {
+					var node = findNode(nodeId);
+					var restoringFocusedMap = focusStack.length > 0;
+					if (!node) return;
+					if (restoringFocusedMap) {
+						clearFocus(false);
+						centerAfterLayout(node);
+					}
+					minder.select(node, true);
+					if (!restoringFocusedMap) centerNodeInCanvas(node);
+				};
+
 				scope.openHistory = function() {
 					if (!scope.card.nodeId || scope.card.nodeId === '—') return;
 					document.dispatchEvent(new CustomEvent('agent-session-history-open', {
@@ -167,6 +419,16 @@ angular.module('kityminderEditor')
 						}
 					}));
 				};
+
+				 scope.$on('$destroy', function() {
+					clearFocus(false);
+					cancelPendingCamera();
+					minder.off('selectionchange', applyRefresh);
+					minder.off('contentchange', handleContentChange);
+					minder.off('nodeattach noderender layoutapply layoutfinish', applyFocusVisibility);
+					document.removeEventListener('km-exec-state', handleExecState);
+					document.removeEventListener('km-execution-availability', handleExecutionAvailability);
+				});
             }
         };
 	}]);

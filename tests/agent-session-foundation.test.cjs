@@ -35,14 +35,12 @@ test('provider catalog exposes all three runtimes managed by the InfiniteMap ext
   assert.doesNotMatch(registry, /extension\.open|infinite-map-provider-codex/);
 });
 
-test('node card exposes read-only task and trace slots', () => {
+test('node card omits task status and session trace panels', () => {
   const template = fs.readFileSync(
     path.join(repoRoot, 'webui/ui/directive/nodeCard/nodeCard.html'),
     'utf8'
   );
-  assert.match(template, /data-component="node-card-task-status"/);
-  assert.match(template, /data-slot="node-row task-state"/);
-  assert.match(template, /data-component="node-card-session-trace"/);
-  assert.match(template, /data-slot="latest-session-placeholder"/);
+  assert.doesNotMatch(template, /data-component="node-card-task-status"/);
+  assert.doesNotMatch(template, /data-component="node-card-session-trace"/);
 	assert.doesNotMatch(template, /<select|<textarea|<input/i);
 });

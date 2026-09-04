@@ -32,6 +32,28 @@ export const kmRecordSessionTool = {
           modelId: { type: 'string' },
           effort: { type: 'string' },
           openUri: { type: 'string' },
+          nativeOpen: {
+            type: 'object',
+            properties: {
+              target: { type: 'string', enum: ['provider-ide', 'provider-cli', 'provider-tui'] },
+              contract: {
+                type: 'string',
+                enum: [
+                  'codex-vscode-private-uri-v1',
+                  'claude-vscode-command-v1',
+                  'claude-vscode-uri-v1',
+                  'copilot-chat-sessions-proposed-v1',
+                ],
+              },
+              uri: { type: 'string' },
+              command: { type: 'string' },
+              viewType: { type: 'string' },
+              minExtensionVersion: { type: 'string' },
+              detectedExtensionVersion: { type: 'string' },
+              verifiedAt: { type: 'string' },
+            },
+            required: ['target', 'contract'],
+          },
         },
         required: ['provider', 'sessionId', 'surface', 'openUri'],
       },

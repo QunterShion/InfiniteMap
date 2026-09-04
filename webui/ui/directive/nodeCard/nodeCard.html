@@ -10,11 +10,12 @@
               ng-repeat="breadcrumb in card.breadcrumbs track by $index">
             <button type="button" data-slot="breadcrumb-link"
                     ng-if="!breadcrumb.isCurrent"
-                    ng-click="centerBreadcrumb(breadcrumb.nodeId)">
+                    ng-click="centerBreadcrumb(breadcrumb.nodeId)"
+                    title="{{ breadcrumb.fullText }}">
                 {{ breadcrumb.text }}
             </button>
             <span data-slot="breadcrumb-current" ng-if="breadcrumb.isCurrent"
-                  aria-current="page">{{ breadcrumb.text }}</span>
+                  aria-current="page" title="{{ breadcrumb.fullText }}">{{ breadcrumb.text }}</span>
             <span data-slot="breadcrumb-separator" ng-if="!$last" aria-hidden="true">›</span>
         </span>
     </nav>
@@ -40,47 +41,6 @@
             <span data-slot="resource" ng-repeat="resource in card.resources">{{ resource }}</span>
         </span>
     </div>
-	<section data-slot="node-section" data-component="node-card-task-status" aria-label="{{ 'taskStatus' | agentSessionText }}">
-		<div data-slot="section-title">{{ 'taskStatus' | agentSessionText }}</div>
-		<div data-slot="node-row task-labels">
-			<span data-slot="node-label">{{ 'taskLabels' | agentSessionText }}</span>
-			<span data-slot="node-value">
-				<span ng-if="!card.task.labels.length">—</span>
-				<span data-slot="resource" ng-repeat="resource in card.task.labels">{{ resource }}</span>
-			</span>
-		</div>
-		<div data-slot="node-row task-state">
-			<span data-slot="node-label">{{ 'sidecarState' | agentSessionText }}</span>
-			<span data-slot="node-value">
-				<span data-slot="execution-state">{{ card.task.stateText }}</span>
-			</span>
-		</div>
-		<div data-slot="node-row task-unavailable-reason" ng-if="card.task.unavailableReason">
-			<span data-slot="node-label">{{ 'diagnostic' | agentSessionText }}</span>
-			<span data-slot="node-value">{{ card.task.unavailableReason }}</span>
-		</div>
-	</section>
-	<section data-slot="node-section" data-component="node-card-session-trace" aria-label="{{ 'sessionTrace' | agentSessionText }}">
-		<div data-slot="section-title">{{ 'sessionTrace' | agentSessionText }}</div>
-		<div data-slot="latest-session" ng-if="card.latestSession">
-			<a href="" data-slot="latest-session-link"
-			   ng-click="$event.preventDefault(); openHistory()">
-				{{ card.latestSession.provider }} · {{ card.latestSession.modelId }}
-			</a>
-			<div data-slot="latest-session-meta">
-				{{ card.latestSession.status }}
-				<span ng-if="card.latestSession.effort"> · {{ card.latestSession.effort }}</span>
-				 · {{ card.latestSession.updatedAt }}
-			</div>
-		</div>
-		<div data-slot="latest-session-placeholder" ng-if="!card.latestSession">
-			{{ 'noSessionRecord' | agentSessionText }}
-		</div>
-		<a href="" data-slot="session-history-entry"
-		   ng-click="$event.preventDefault(); openHistory()">
-			{{ 'history' | agentSessionText }}<span ng-if="card.historyCount">（{{ card.historyCount }}）</span>
-		</a>
-	</section>
     <div ng-if="card.exec" data-component="node-card-lease-details">
         <div data-slot="node-row">
             <span data-slot="node-label">{{ 'executionState' | agentSessionText }}</span>

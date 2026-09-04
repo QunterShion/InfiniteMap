@@ -4,9 +4,10 @@ angular.module('kityminderEditor').directive('agentSessionHistory', [
         return {
             restrict: 'A',
             templateUrl: 'ui/directive/agentSessionHistory/agentSessionHistory.html',
-            link: function(scope) {
-                scope.history = { visible: false, loading: false, sessions: [], total: 0 };
+			link: function(scope) {
+				scope.history = { visible: false, loading: false, sessions: [], total: 0, openingExecutionId: null };
 				var storedSessions = [];
+				var openStates = {};
 
                 function apply() {
                     if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
@@ -36,7 +37,8 @@ angular.module('kityminderEditor').directive('agentSessionHistory', [
 
 				function decorateSessions(sessions) {
 					return (sessions || []).map(function(session) {
-						return Object.assign({}, session, {
+						var state = openStates[session.executionId] || {};
+						return Object.assign({}, session, state, {
 							nodeTitle: nodeTitle(session.nodeId)
 						});
 					});
@@ -103,11 +105,41 @@ angular.module('kityminderEditor').directive('agentSessionHistory', [
 				}
 				document.addEventListener('agent-session-history-close', close);
 				scope.closeHistory = function() { close({ detail: { restoreFocus: true } }); };
-                scope.openSession = function(session) {
-					document.dispatchEvent(new CustomEvent('agent-session-detail-open', {
-						detail: { session: session, source: 'history' }
-					}));
-                };
+				function openNative(session, target, mode, fallbackPolicy) {
+					if (!session || !session.executionId || session.opening || openStates[session.executionId] && openStates[session.executionId].opening) return;
+					var nodeId = session.nodeId || scope.history.nodeId || null;
+					openStates[session.executionId] = { opening: true, openError: null, openResult: null };
+					scope.history.openingExecutionId = session.executionId;
+					scope.history.sessions = mergeAgentSessions(storedSessions);
+					apply();
+					agentSessionService.openSession(nodeId, session.executionId, target || 'provider-ide', mode || 'native', fallbackPolicy || 'provider-cli').then(function(result) {
+						openStates[session.executionId] = {
+							opening: false,
+							openResult: result,
+							openFallback: result && result.opened === false
+						};
+						scope.history.openingExecutionId = null;
+						scope.history.sessions = mergeAgentSessions(storedSessions);
+						apply();
+					}, function(error) {
+						openStates[session.executionId] = { opening: false, openError: error && error.message || String(error) };
+						scope.history.openingExecutionId = null;
+						scope.history.sessions = mergeAgentSessions(storedSessions);
+						apply();
+					});
+				}
+
+				scope.openSession = function(session) { openNative(session); };
+				scope.retrySessionOpen = function(session) { openNative(session); };
+				scope.openSessionFallback = function(session, target) {
+					if (target === 'infinite-map') {
+						document.dispatchEvent(new CustomEvent('agent-session-detail-open', {
+							detail: { session: session, source: 'history-fallback' }
+						}));
+						return;
+					}
+					openNative(session, target, 'fallback-only', target === 'provider-cli' ? 'provider-cli' : 'infinite-map-detail');
+				};
 				scope.loadMoreSessions = function() {
 					if (!scope.history.nextCursor || scope.history.loading) return;
 					scope.history.loading = true;

@@ -13,11 +13,19 @@
 	</div>
 	<ol data-slot="activity-list" ng-if="activity.items.length">
 		<li data-slot="activity-item" ng-repeat="item in activity.items track by item.executionId">
-			<button data-slot="activity-link" type="button" ng-click="openActivitySession(item)"
+			<button data-slot="activity-link" type="button" ng-click="openActivitySession(item)" ng-disabled="item.opening"
 				ng-attr-data-execution-id="{{ item.executionId }}">
 				<span data-slot="activity-node">{{ item.nodeTitle }}</span>
 				<span data-slot="activity-state">{{ item.status }}</span>
+				<span data-slot="open-state" ng-if="item.opening">{{ 'openingSession' | agentSessionText }}</span>
 			</button>
+			<div data-slot="open-notice" ng-if="item.openResult && item.openResult.warning">{{ item.openResult.warning }}</div>
+			<div data-slot="open-error" ng-if="item.openError">{{ item.openError }}</div>
+			<div data-slot="open-fallback" ng-if="item.openFallback">
+				<button data-slot="button" type="button" ng-click="openActivitySessionFallback(item, 'infinite-map')">{{ 'openInInfiniteMap' | agentSessionText }}</button>
+				<button data-slot="button" type="button" ng-click="openActivitySessionFallback(item, 'provider-cli')">{{ 'resumeInCli' | agentSessionText }}</button>
+				<button data-slot="button" type="button" ng-click="retryActivitySessionOpen(item)">{{ 'retry' | agentSessionText }}</button>
+			</div>
 			<div data-slot="activity-detail" ng-if="item.provider">
 				{{ item.provider }}<span ng-if="item.modelId"> · {{ item.modelId }}</span>
 			</div>

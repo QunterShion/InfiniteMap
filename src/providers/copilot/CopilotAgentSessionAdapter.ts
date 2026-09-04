@@ -260,7 +260,10 @@ export class CopilotAgentSessionAdapter implements AgentSessionAdapter {
 	}
 
 	public async open(_input: OpenSessionInput): Promise<void> {
-		return;
+		throw this.withCode(
+			'NATIVE_OPEN_UNSUPPORTED',
+			'Copilot SDK sessions are not proven to be discoverable by the VS Code Copilot UI.'
+		);
 	}
 
 	public async respondToInput(input: RespondToInputInput): Promise<void> {

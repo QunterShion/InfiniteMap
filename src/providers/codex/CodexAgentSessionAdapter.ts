@@ -426,8 +426,20 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 		}
 	}
 
-	public async open(_input: OpenSessionInput): Promise<void> {
-		throw new Error('Codex does not expose a stable API for opening a specific thread in its IDE UI.');
+	public async open(input: OpenSessionInput): Promise<void> {
+		if (input.target !== 'provider-cli' && input.target !== 'provider-tui') {
+			throw this.withCode('NATIVE_OPEN_UNSUPPORTED', 'Codex IDE opening is handled by the guarded native resolver.');
+		}
+		const sessionId = input.session.threadId || input.session.sessionId;
+		if (!sessionId) {
+			throw this.withCode('SESSION_ID_MISSING', 'Codex session history is missing its thread ID.');
+		}
+		const terminal = vscode.window.createTerminal({
+			name: 'InfiniteMap · Codex',
+			shellPath: (await this.ensureProbe()).executable,
+			shellArgs: ['resume', sessionId],
+		});
+		terminal.show();
 	}
 
 	public async respondToInput(input: RespondToInputInput): Promise<void> {
@@ -1249,7 +1261,7 @@ export class CodexAgentSessionAdapter implements AgentSessionAdapter {
 			canStream: true,
 			kmTaskExecution: availability === 'ready',
 			receiptMode: 'native-json-schema',
-			openTargets: ['infinite-map'],
+				openTargets: ['infinite-map', 'provider-cli'],
 			sessionOwnership: 'provider',
 		};
 	}

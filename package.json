@@ -118,6 +118,23 @@
                     "type": "string",
                     "default": "#ffffff",
                     "description": "%infiniteMap.imageBackgroundColor%"
+                },
+                "infiniteMap.agentSession.nativeOpenEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Open recorded agent sessions in the matching native VS Code Provider when its verified compatibility contract is available."
+                },
+                "infiniteMap.agentSession.codexVersionAllowlist": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": ["26."],
+                    "description": "Allowed version prefixes for the private Codex VS Code session-opening contract."
+                },
+                "infiniteMap.agentSession.claudeVersionAllowlist": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": ["2.1."],
+                    "description": "Allowed version prefixes for the experimental Claude VS Code session-opening contract."
                 }
             }
         }

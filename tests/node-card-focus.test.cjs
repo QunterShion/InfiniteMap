@@ -300,7 +300,7 @@ test('node card builds the full root breadcrumb and centers a clicked parent nod
     [
       { isCurrent: false, nodeId: 'root', text: 'Root' },
       { isCurrent: false, nodeId: 'branch', text: 'Branch' },
-      { isCurrent: true, nodeId: 'focus-target', text: 'Focus target' },
+      { isCurrent: true, nodeId: 'focus-target', text: 'Focus ta...' },
     ],
   );
   assert.equal(Object.hasOwn(scope.card, 'level'), false);
@@ -333,16 +333,18 @@ test('focus renders only the selected subtree, expands it fully, and keeps editi
   assert.equal(treeRoot.renderContainer.visible, false);
   assert.equal(branch.renderContainer.visible, false);
   assert.equal(sibling.renderContainer.visible, false);
-  for (const node of [focusTarget, focusedChild, focusedLeaf]) {
-    assert.equal(node.renderContainer.visible, true, `${node.data.id} should be visible`);
-    assert.equal(node.isExpanded(), true, `${node.data.id} should be expanded in the focused view`);
-  }
+  assert.equal(focusTarget.renderContainer.visible, true);
+  assert.equal(focusedChild.renderContainer.visible, false, 'collapsed focus roots should hide descendants');
+  assert.equal(focusedLeaf.renderContainer.visible, false, 'collapsed descendants should stay hidden');
+  assert.equal(focusTarget.isExpanded(), false);
+  assert.equal(focusedChild.isExpanded(), false);
+  assert.equal(focusedLeaf.isExpanded(), false);
   assert.equal(focusTarget.data.expandState, 'collapse');
   assert.equal(focusedChild.data.expandState, undefined);
   assert.equal(focusedLeaf.data.expandState, 'collapse');
   assert.equal(focusTarget.connection.visible, false, 'focused root incoming edge should be hidden');
-  assert.equal(focusedChild.connection.visible, true);
-  assert.equal(focusedLeaf.connection.visible, true);
+  assert.equal(focusedChild.connection.visible, false);
+  assert.equal(focusedLeaf.connection.visible, false);
   assert.equal(sibling.connection.visible, false);
   assert.equal(treeRoot.renderTreeCount, 1);
   assert.equal(minder.layoutCount, 1);
@@ -475,7 +477,7 @@ test('nested focus pushes a level and return pops one level at a time', async ()
   assert.equal(scope.card.isCurrentFocus, false);
   assert.equal(scope.card.nodeId, focusedChild.data.id);
   assert.equal(focusTarget.renderContainer.visible, true);
-  assert.equal(focusedChild.renderContainer.visible, true);
+  assert.equal(focusedChild.renderContainer.visible, false);
   assert.equal(sibling.renderContainer.visible, false);
 	minder.emit('layoutallfinish');
 	await new Promise((resolve) => setTimeout(resolve, 5));

@@ -6,7 +6,13 @@ import { ProviderComponentRegistry } from '../providers/providerComponentRegistr
 import { buildUserTurn } from './buildUserTurn';
 import { AgentSessionRequest, AgentSessionResult } from './protocol';
 import { SessionOrchestrator } from './sessionOrchestrator';
-import { AGENT_SESSION_PROTOCOL_VERSION, AgentSessionErrorCode, SessionSnapshot } from './types';
+import {
+	AGENT_SESSION_PROTOCOL_VERSION,
+	AgentSessionErrorCode,
+	AgentSessionRef,
+	NodeExecutionStatus,
+	SessionSnapshot,
+} from './types';
 
 const MAX_INPUT_LENGTH = 64 * 1024;
 
@@ -376,17 +382,45 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 					break;
 				}
 				case 'openSession': {
-					if (!request.nodeId) {
-						throw this.error('INTERNAL_ERROR', 'A nodeId is required to open session history.', false);
+					if (!request.executionId) {
+						throw this.error('SESSION_NOT_FOUND', 'An executionId is required to open a recorded session.', false);
 					}
-					const history = await this.callKmTool(document, 'km_list_node_sessions', {
-						filePath: document.uri.fsPath,
-						nodeId: request.nodeId,
+					await this.requireTrustedWorkspace(document);
+					// A live snapshot may still be waiting behind the host persistence queue.
+					await this.sessionPersistQueues.get(request.executionId);
+					let record = await this.findSessionRecord(document, request.executionId, request.nodeId);
+					if (!record) {
+						const live = this.orchestrator.getSnapshot(documentKey);
+						if (live?.executionId === request.executionId) {
+							await this.queueSessionPersistence(documentKey, live);
+							record = await this.findSessionRecord(document, request.executionId, request.nodeId);
+						}
+					}
+					if (!record) {
+						throw this.error('SESSION_NOT_FOUND', `Session history was not found: ${request.executionId}`, false);
+					}
+					if (!record.session?.sessionId && !record.session?.threadId) {
+						throw this.error('SESSION_ID_MISSING', 'The recorded Provider session has no canonical session ID.', false);
+					}
+					const nativeOpenEnabled = vscode.workspace
+						.getConfiguration('infiniteMap.agentSession')
+						.get<boolean>('nativeOpenEnabled', true);
+					const openResult = await this.orchestrator.openHistoricalSession({
+						executionId: record.executionId,
+						session: record.session,
+						target: nativeOpenEnabled ? request.target : 'infinite-map',
+						mode: nativeOpenEnabled ? request.mode || 'native' : 'fallback-only',
+						fallbackPolicy: nativeOpenEnabled
+							? request.fallbackPolicy || 'provider-cli'
+							: 'infinite-map-detail',
 					});
-					if (request.target && request.target !== 'infinite-map') {
-						await this.orchestrator.open(documentKey, request.target);
+					// Native metadata is a cache hint. Persist it best-effort without changing
+					// ownership, node labels, or the InfiniteMap deep-link contract.
+					if (record.session.nativeOpen) {
+						void this.persistNativeOpen(document, record.executionId, record.status, record.session)
+							.catch(() => undefined);
 					}
-					response = this.success(request, { history, executionId: request.executionId });
+					response = this.success(request, openResult);
 					break;
 				}
 				default:
@@ -518,6 +552,7 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 				modelId: session.modelId,
 				effort: session.effort,
 				openUri: session.openUri,
+				nativeOpen: session.nativeOpen,
 			},
 			workerId: this.sessionWorkerId,
 			requestedConfig: this.sessionConfig(snapshot.requestedConfig),
@@ -526,6 +561,33 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 		// km_record_session intentionally accepts an unbound execution during the
 		// host lifecycle. A later agent claim binds the same executionId to a real
 		// node atomically; the host never guesses task kind or bypasses a lease.
+		await this.callKmTool(document, 'km_record_session', { ...base, dryRun: true });
+		await this.callKmTool(document, 'km_record_session', base);
+	}
+
+	private async persistNativeOpen(
+		document: vscode.CustomDocument,
+		executionId: string,
+		status: NodeExecutionStatus,
+		session: AgentSessionRef
+	): Promise<void> {
+		const base = {
+			filePath: document.uri.fsPath,
+			executionId,
+			status,
+			session: {
+				provider: session.provider,
+				sessionId: session.sessionId,
+				threadId: session.threadId,
+				turnId: session.turnId,
+				surface: session.surface,
+				modelId: session.modelId,
+				effort: session.effort,
+				openUri: session.openUri,
+				nativeOpen: session.nativeOpen,
+			},
+			workerId: this.sessionWorkerId,
+		};
 		await this.callKmTool(document, 'km_record_session', { ...base, dryRun: true });
 		await this.callKmTool(document, 'km_record_session', base);
 	}
@@ -668,6 +730,9 @@ export class AgentControlBarCoordinator implements vscode.Disposable {
 			'PROVIDER_LOAD_FAILED', 'PROVIDER_INCOMPATIBLE', 'AUTH_REQUIRED', 'CAPABILITY_UNAVAILABLE',
 				'MODEL_UNAVAILABLE', 'EFFORT_UNAVAILABLE', 'PERMISSION_MODE_UNAVAILABLE',
 				'NO_ACTIVE_SESSION', 'NO_ACTIVE_TURN', 'STALE_TURN',
+				'SESSION_NOT_FOUND', 'SESSION_ID_MISSING', 'NATIVE_CLIENT_MISSING',
+				'NATIVE_CLIENT_INCOMPATIBLE', 'NATIVE_SESSION_NOT_FOUND', 'NATIVE_OPEN_UNSUPPORTED',
+				'NATIVE_OPEN_FAILED', 'SESSION_OWNERSHIP_CONFLICT',
 			'TIMEOUT', 'INTERNAL_ERROR',
 		].includes(code);
 	}

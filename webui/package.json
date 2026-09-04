@@ -5,10 +5,10 @@
   "main": "kityminder.editor.js",
   "scripts": {
     "init": "npm i -g wr && npm install -g less && npm install -g bower && bower install && npm install",
-    "build": "grunt build",
-    "dev": "grunt dev",
+    "build": "patch-package && grunt build",
+    "dev": "patch-package && grunt dev",
     "watch": "wr --exec \"lessc --source-map less/editor.less dist/kityminder.editor.css && grunt build\" less ui",
-    "postinstall": "bower install",
+    "postinstall": "bower install && patch-package",
     "build:watch": "rollup -w --config ./rollup.config.js"
   },
   "repository": {
@@ -47,6 +47,7 @@
     "grunt-wiredep": "^2.0.0",
     "jshint-stylish": "^1.0.0",
     "load-grunt-tasks": "^3.1.0",
+    "patch-package": "^8.0.1",
     "uglify-js": "^2.8.29"
   },
   "dependencies": {

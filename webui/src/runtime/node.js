@@ -95,27 +95,90 @@ define(function (require, exports, module) {
       minder.fire('exportNodeData');
     }
 
-    //main.button({
-    //    position: 'ring',
-    //    key: '/',
-    //    action: function(){
-    //        if (!minder.queryCommandState('expand')) {
-    //            minder.execCommand('expand');
-    //        } else if (!minder.queryCommandState('collapse')) {
-    //            minder.execCommand('collapse');
-    //        }
-    //    },
-    //    enable: function() {
-    //        return minder.queryCommandState('expand') != -1 || minder.queryCommandState('collapse') != -1;
-    //    },
-    //    beforeShow: function() {
-    //        if (!minder.queryCommandState('expand')) {
-    //            this.$button.children[0].innerHTML = '展开';
-    //        } else {
-    //            this.$button.children[0].innerHTML = '收起';
-    //        }
-    //    }
-    //})
+    // 递归展开所有子节点
+    function expandAll(node) {
+      var children = node.getChildren();
+      if (!children || children.length === 0) return;
+
+      // 先展开当前节点
+      if (!node.isExpanded()) {
+        minder.execCommand('expand', node);
+      }
+
+      // 递归展开所有子节点
+      children.forEach(function(child) {
+        expandAll(child);
+      });
+    }
+
+    // 递归收缩所有子节点
+    function collapseAll(node) {
+      var children = node.getChildren();
+      if (!children || children.length === 0) return;
+
+      // 先递归收缩所有子节点
+      children.forEach(function(child) {
+        collapseAll(child);
+      });
+
+      // 再收缩当前节点
+      if (node.isExpanded()) {
+        minder.execCommand('collapse', node);
+      }
+    }
+
+    // 检查节点是否有任何收缩的子孙节点
+    function hasCollapsedDescendant(node) {
+      var children = node.getChildren();
+      if (!children || children.length === 0) return false;
+
+      for (var i = 0; i < children.length; i++) {
+        var child = children[i];
+        if (!child.isExpanded() && child.getChildren().length > 0) {
+          return true;
+        }
+        if (hasCollapsedDescendant(child)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    main.button({
+      position: 'ring',
+      label: lang('expandcollapse', 'runtime/node'),
+      key: '/',
+      action: function(){
+        var node = minder.getSelectedNode();
+        if (!node) return;
+
+        // 检查是否有收缩的子孙节点
+        if (hasCollapsedDescendant(node)) {
+          // 有收缩的节点，执行全部展开
+          expandAll(node);
+        } else {
+          // 全部展开状态，执行全部收缩
+          collapseAll(node);
+        }
+        fsm.jump('normal', 'command-executed');
+      },
+      enable: function() {
+        var node = minder.getSelectedNode();
+        if (!node) return false;
+        var children = node.getChildren();
+        return children && children.length > 0;
+      },
+      beforeShow: function() {
+        var node = minder.getSelectedNode();
+        if (!node) return;
+
+        if (hasCollapsedDescendant(node)) {
+          this.$button.children[0].innerHTML = lang('expandall', 'runtime/node');
+        } else {
+          this.$button.children[0].innerHTML = lang('collapseall', 'runtime/node');
+        }
+      }
+    })
   }
 
   return (module.exports = NodeRuntime);

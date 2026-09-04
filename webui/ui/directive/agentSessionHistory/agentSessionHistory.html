@@ -17,10 +17,18 @@
 			<div data-slot="history-node" ng-if="!history.nodeId && session.nodeId">
 				{{ session.nodeTitle || session.nodeId }}
 			</div>
-			<button data-slot="history-link" type="button" ng-click="openSession(session)"
+			<button data-slot="history-link" type="button" ng-click="openSession(session)" ng-disabled="session.opening"
 				ng-attr-data-execution-id="{{ session.executionId }}">
-                {{ session.session.provider }} · {{ session.session.modelId || ('defaultEffort' | agentSessionText) }}
+				<span>{{ session.session.provider }} · {{ session.session.modelId || ('defaultEffort' | agentSessionText) }}</span>
+				<span data-slot="open-state" ng-if="session.opening">{{ 'openingSession' | agentSessionText }}</span>
 			</button>
+			<div data-slot="open-notice" ng-if="session.openResult && session.openResult.warning">{{ session.openResult.warning }}</div>
+			<div data-slot="open-error" ng-if="session.openError">{{ session.openError }}</div>
+			<div data-slot="open-fallback" ng-if="session.openFallback">
+				<button data-slot="button" type="button" ng-click="openSessionFallback(session, 'infinite-map')">{{ 'openInInfiniteMap' | agentSessionText }}</button>
+				<button data-slot="button" type="button" ng-click="openSessionFallback(session, 'provider-cli')">{{ 'resumeInCli' | agentSessionText }}</button>
+				<button data-slot="button" type="button" ng-click="retrySessionOpen(session)">{{ 'retry' | agentSessionText }}</button>
+			</div>
             <div data-slot="history-config">
                 <span>{{ session.status }}</span>
                 <span ng-if="session.session.effort"> · {{ session.session.effort }}</span>

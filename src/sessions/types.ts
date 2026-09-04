@@ -4,6 +4,52 @@ export const AGENT_SESSION_PROTOCOL_VERSION = 1 as const;
 
 export type ProviderId = string;
 export type CapabilityLevel = 'native' | 'emulated' | 'experimental' | 'unsupported';
+export type OpenTarget = 'infinite-map' | 'provider-cli' | 'provider-tui' | 'provider-ide';
+export type OpenFallbackPolicy = 'none' | 'infinite-map-detail' | 'provider-cli' | 'prompt';
+export type SessionOpenMode = 'native' | 'fallback-only';
+
+export interface NativeOpenDescriptor {
+	target: Exclude<OpenTarget, 'infinite-map'>;
+	contract:
+		| 'codex-vscode-private-uri-v1'
+		| 'claude-vscode-command-v1'
+		| 'claude-vscode-uri-v1'
+		| 'copilot-chat-sessions-proposed-v1';
+	uri?: string;
+	command?: string;
+	viewType?: string;
+	minExtensionVersion?: string;
+	detectedExtensionVersion?: string;
+	verifiedAt?: string;
+}
+
+export interface NativeOpenCapability {
+	available: boolean;
+	level: Extract<CapabilityLevel, 'native' | 'experimental' | 'unsupported'>;
+	extensionId?: string;
+	extensionVersion?: string;
+	contract?: NativeOpenDescriptor['contract'];
+	command?: string;
+	viewType?: string;
+	minExtensionVersion?: string;
+	reason?: string;
+	errorCode?: AgentSessionErrorCode;
+	expiresAt?: string;
+}
+
+export interface SessionOpenResult {
+	opened: boolean;
+	executionId: string;
+	provider: ProviderId;
+	sessionId: string;
+	target: OpenTarget;
+	method: 'provider-command' | 'provider-uri' | 'provider-cli' | 'infinite-map' | 'detail-fallback';
+	capability: CapabilityLevel;
+	extensionId?: string;
+	extensionVersion?: string;
+	fallbackAvailable: boolean;
+	warning?: string;
+}
 export type ProviderInstallState =
 	| 'missing'
 	| 'installed_inactive'
@@ -121,6 +167,7 @@ export interface AgentSessionRef {
 	effort?: string;
 	permissionModeId?: string;
 	openUri: string;
+	nativeOpen?: NativeOpenDescriptor;
 }
 
 export interface SessionConfiguration {
@@ -228,7 +275,7 @@ export interface InterruptTurnInput {
 
 export interface OpenSessionInput {
 	session: AgentSessionRef;
-	target?: 'infinite-map' | 'provider-cli' | 'provider-tui' | 'provider-ide';
+	target?: OpenTarget;
 }
 
 export interface RespondToInputInput {
@@ -297,6 +344,14 @@ export const AGENT_SESSION_ERROR_CODES = [
 	'NO_ACTIVE_SESSION',
 	'NO_ACTIVE_TURN',
 	'STALE_TURN',
+	'SESSION_NOT_FOUND',
+	'SESSION_ID_MISSING',
+	'NATIVE_CLIENT_MISSING',
+	'NATIVE_CLIENT_INCOMPATIBLE',
+	'NATIVE_SESSION_NOT_FOUND',
+	'NATIVE_OPEN_UNSUPPORTED',
+	'NATIVE_OPEN_FAILED',
+	'SESSION_OWNERSHIP_CONFLICT',
 	'TIMEOUT',
 	'INTERNAL_ERROR',
 ] as const;

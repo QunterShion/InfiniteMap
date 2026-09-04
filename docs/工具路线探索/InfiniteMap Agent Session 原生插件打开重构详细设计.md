@@ -566,18 +566,18 @@ interface SessionOwnership {
 
 ## 12. 待决策清单与影响评估
 
-| 编号 | 待决策                           | 选项                                                  | 影响                                                                      | 建议                                              |
-| ---- | -------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------- |
-| D1   | 详情弹窗是否彻底删除             | A 保留 fallback；B 立即删除                           | A 增加维护面但抗私有协议失败；B 交付简单但 Copilot 无原生能力时无历史查看 | 选 A，待 Phase B 指标达标再删                     |
-| D2   | Copilot 原生打开承诺             | A 首期不承诺；B 依赖 proposed API；C 读取私有 storage | B 版本风险；C 安全/兼容风险                                               | 选 A；B 仅实验 flag；禁止 C                       |
-| D3   | Codex 私有 URI 是否进入生产      | A allowlist + 探测；B 不支持 IDE，只 CLI              | A 可满足用户目标但需持续回归；B 稳定性高但体验弱                          | 选 A，明确 experimental 和 fallback               |
-| D4   | Claude 原生命令是否承诺稳定      | A experimental；B 仅 CLI                              | A 可定位 IDE；B 更稳定                                                    | 选 A experimental，CLI 作为稳定路径               |
-| D5   | sidecar schema 是否升级到 v2     | A additive 不改版本；B v1→v2                         | B 可审计，需迁移代码；A 改动小但版本语义弱                                | 选 B                                              |
-| D6   | fallback 默认策略                | A 详情；B CLI；C 弹窗让用户选                         | A 保留现有可读性；B 需安装 CLI；C 多一步交互                              | 默认 A，Claude 可提供 B，统一允许用户改选         |
-| D7   | Codex Runtime 进程模型           | A 一 Session 一进程；B 共享进程                       | A 隔离好、资源高；B 资源低、锁复杂                                        | 活跃会话≤3选 A，否则 B+thread lease              |
-| D8   | ownership handoff 首期范围       | A 只读打开；B 打开即接管；C 完整 handoff              | A 风险最低；B 会双写；C 工期大                                            | 选 A                                              |
-| D9   | nativeOpen 是否写入 KM 节点 JSON | A 仅 sidecar；B 节点 latestSession 同步               | A 改 KM 少；B 深链/节点卡片可直接显示                                     | 先 sidecar + latestSession 只保留摘要，稳定后同步 |
-| D10  | 原生打开成功判定                 | A 命令未抛错；B Provider 回执                         | A 可实现但不证明定位；B 复杂且依赖 Provider                               | 首期 A，日志区分 attempted/accepted/verified      |
+| 编号 | 待决策                           | 选项                                                  | 影响                                                                      | 建议                                              | 决策                                          |
+| ---- | -------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------- |
+| D1   | 详情弹窗是否彻底删除             | A 保留 fallback；B 立即删除                           | A 增加维护面但抗私有协议失败；B 交付简单但 Copilot 无原生能力时无历史查看 | 选 A，待 Phase B 指标达标再删                     | B 立即删除                                    |
+| D2   | Copilot 原生打开承诺             | A 首期不承诺；B 依赖 proposed API；C 读取私有 storage | B 版本风险；C 安全/兼容风险                                               | 选 A；B 仅实验 flag；禁止 C                       | 选 A；B 仅实验 flag；禁止 C                   |
+| D3   | Codex 私有 URI 是否进入生产      | A allowlist + 探测；B 不支持 IDE，只 CLI              | A 可满足用户目标但需持续回归；B 稳定性高但体验弱                          | 选 A，明确 experimental 和 fallback               | 选 A，明确 experimental 和 fallback           |
+| D4   | Claude 原生命令是否承诺稳定      | A experimental；B 仅 CLI                              | A 可定位 IDE；B 更稳定                                                    | 选 A experimental，CLI 作为稳定路径               | 选 A experimental，CLI 作为稳定路径           |
+| D5   | sidecar schema 是否升级到 v2     | A additive 不改版本；B v1→v2                         | B 可审计，需迁移代码；A 改动小但版本语义弱                                | 选 B                                              | B                                             |
+| D6   | fallback 默认策略                | A 详情；B CLI；C 弹窗让用户选                         | A 保留现有可读性；B 需安装 CLI；C 多一步交互                              | 默认 A，Claude 可提供 B，统一允许用户改选         | B CLI；                                       |
+| D7   | Codex Runtime 进程模型           | A 一 Session 一进程；B 共享进程                       | A 隔离好、资源高；B 资源低、锁复杂                                        | 活跃会话≤3选 A，否则 B+thread lease              | 活跃会话≤3选 A，否则 B+thread lease          |
+| D8   | ownership handoff 首期范围       | A 只读打开；B 打开即接管；C 完整 handoff              | A 风险最低；B 会双写；C 工期大                                            | 选 A                                              | A 只读打开；                                  |
+| D9   | nativeOpen 是否写入 KM 节点 JSON | A 仅 sidecar；B 节点 latestSession 同步               | A 改 KM 少；B 深链/节点卡片可直接显示                                     | 先 sidecar + latestSession 只保留摘要，稳定后同步 | A 仅 sidecar；                                |
+| D10  | 原生打开成功判定                 | A 命令未抛错；B Provider 回执                         | A 可实现但不证明定位；B 复杂且依赖 Provider                               | 首期 A，日志区分 attempted/accepted/verified      | 首期 A，日志区分 attempted/accepted/verified  |
 
 ## 13. 分阶段实施计划
 
@@ -615,7 +615,7 @@ interface SessionOwnership {
 
 交付门槛：不能把“SDK resume 成功”误报为“Copilot UI 打开成功”。
 
-### Phase 4：Ownership/handoff（可选）
+### Phase 4：Ownership/handoff（取消）
 
 - 增加 owner/lease/handoff 数据和 CAS 工具。
 - Provider 支持释放/接管时才启用；否则只记录 requested。

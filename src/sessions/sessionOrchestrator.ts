@@ -1,17 +1,23 @@
 import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import { ProviderComponentRegistry } from '../providers/providerComponentRegistry';
+import { NativeOpenResolver } from './nativeOpenResolver';
 import {
 	AgentSessionAdapter,
+	AgentSessionErrorCode,
 	AgentSessionEventPayload,
 	AgentSessionRef,
 	NodeExecutionStatus,
+	OpenFallbackPolicy,
+	OpenTarget,
 	ProviderDescriptor,
 	ProviderModelOption,
 	ProviderPermissionModeOption,
 	SessionConfiguration,
 	SessionMutationInput,
 	SessionSnapshot,
+	SessionOpenMode,
+	SessionOpenResult,
 	SessionTranscriptEntry,
 } from './types';
 
@@ -63,6 +69,14 @@ export interface RecoverSessionInput {
 	mcpServer: { command: string; args: string[] };
 }
 
+export interface OpenHistoricalSessionInput {
+	executionId: string;
+	session: AgentSessionRef;
+	target?: OpenTarget;
+	mode?: SessionOpenMode;
+	fallbackPolicy?: OpenFallbackPolicy;
+}
+
 export class SessionOrchestrator implements vscode.Disposable {
 	private readonly adapterOperations = new Map<string, Promise<AgentSessionAdapter>>();
 	private readonly adapters = new Map<string, AgentSessionAdapter>();
@@ -73,7 +87,10 @@ export class SessionOrchestrator implements vscode.Disposable {
 	private readonly hostSequences = new Map<string, number>();
 	public readonly onDidEvent = this.eventEmitter.event;
 
-	constructor(private readonly providers: ProviderComponentRegistry) {}
+	constructor(
+		private readonly providers: ProviderComponentRegistry,
+		private readonly nativeOpenResolver: NativeOpenResolver = new NativeOpenResolver()
+	) {}
 
 	public discover(): Promise<ProviderDescriptor[]> {
 		return this.providers.discover();
@@ -373,16 +390,49 @@ export class SessionOrchestrator implements vscode.Disposable {
 		return this.toSnapshot(active);
 	}
 
-	public async open(documentKey: string, target?: 'infinite-map' | 'provider-cli' | 'provider-tui' | 'provider-ide'): Promise<void> {
+	public async openActiveSession(
+		documentKey: string,
+		target?: OpenTarget,
+		fallbackPolicy?: OpenFallbackPolicy
+	): Promise<SessionOpenResult> {
 		const active = this.requireSession(documentKey);
-		const capabilities = await active.adapter.detectCapabilities();
-		const requestedTarget = target || 'infinite-map';
-		if (!capabilities.openTargets.includes(requestedTarget)) {
-			throw this.withCode('CAPABILITY_UNAVAILABLE', `Provider cannot open target: ${requestedTarget}`);
+		return this.openHistoricalSession({
+			executionId: active.executionId,
+			session: active.session,
+			target,
+			fallbackPolicy,
+		});
+	}
+
+	public async openHistoricalSession(input: OpenHistoricalSessionInput): Promise<SessionOpenResult> {
+		const requestedTarget = input.target || 'provider-ide';
+		const fallbackPolicy = input.fallbackPolicy || 'provider-cli';
+		this.canonicalSessionId(input.session);
+		if (requestedTarget === 'infinite-map' || fallbackPolicy === 'infinite-map-detail' && input.mode === 'fallback-only') {
+			return this.detailFallback(input, requestedTarget, 'Open the recorded session detail in InfiniteMap.');
 		}
-		if (requestedTarget !== 'infinite-map') {
-			await active.adapter.open({ session: active.session, target: requestedTarget });
+		if (input.mode === 'fallback-only') {
+			return this.openFallback(input, fallbackPolicy, 'Native opening was skipped by request.');
 		}
+		if (requestedTarget === 'provider-ide') {
+			try {
+				return await this.nativeOpenResolver.open({
+					executionId: input.executionId,
+					session: input.session,
+				});
+			} catch (error) {
+				if (fallbackPolicy === 'none') {
+					throw error;
+				}
+				return this.openFallback(input, fallbackPolicy, this.errorMessage(error));
+			}
+		}
+		return this.openProviderTarget(input, requestedTarget);
+	}
+
+	/** @deprecated Use openActiveSession for control-bar actions. */
+	public open(documentKey: string, target?: OpenTarget): Promise<SessionOpenResult> {
+		return this.openActiveSession(documentKey, target);
 	}
 
 	public dispose(): void {
@@ -397,7 +447,80 @@ export class SessionOrchestrator implements vscode.Disposable {
 		this.adapterOperations.clear();
 		this.sessions.clear();
 		this.idempotentResults.clear();
+		this.nativeOpenResolver.dispose();
 		this.eventEmitter.dispose();
+	}
+
+	private async openFallback(
+		input: OpenHistoricalSessionInput,
+		policy: OpenFallbackPolicy,
+		reason: string
+	): Promise<SessionOpenResult> {
+		if (policy === 'provider-cli') {
+			try {
+				const result = await this.openProviderTarget(input, 'provider-cli');
+				return { ...result, warning: reason };
+			} catch (error) {
+				return this.detailFallback(
+					input,
+					'provider-ide',
+					`${reason} CLI fallback is unavailable: ${this.errorMessage(error)}`
+				);
+			}
+		}
+		return this.detailFallback(input, 'provider-ide', reason);
+	}
+
+	private async openProviderTarget(
+		input: OpenHistoricalSessionInput,
+		target: Exclude<OpenTarget, 'infinite-map' | 'provider-ide'>
+	): Promise<SessionOpenResult> {
+		const adapter = await this.getAdapter(input.session.provider);
+		const capabilities = await adapter.detectCapabilities();
+		if (!capabilities.openTargets.includes(target)) {
+			throw this.withCode('NATIVE_OPEN_UNSUPPORTED', `Provider cannot open target: ${target}`);
+		}
+		await adapter.open({ session: input.session, target });
+		return {
+			opened: true,
+			executionId: input.executionId,
+			provider: input.session.provider,
+			sessionId: this.canonicalSessionId(input.session),
+			target,
+			method: 'provider-cli',
+			capability: 'emulated',
+			fallbackAvailable: true,
+		};
+	}
+
+	private detailFallback(
+		input: OpenHistoricalSessionInput,
+		target: OpenTarget,
+		warning: string
+	): SessionOpenResult {
+		return {
+			opened: false,
+			executionId: input.executionId,
+			provider: input.session.provider,
+			sessionId: this.canonicalSessionId(input.session),
+			target,
+			method: 'detail-fallback',
+			capability: 'unsupported',
+			fallbackAvailable: true,
+			warning,
+		};
+	}
+
+	private canonicalSessionId(session: AgentSessionRef): string {
+		const value = String(session.threadId || session.sessionId || '').trim();
+		if (!value) {
+			throw this.withCode('SESSION_ID_MISSING', 'The recorded Provider session has no canonical session ID.');
+		}
+		return value;
+	}
+
+	private errorMessage(error: unknown): string {
+		return error instanceof Error ? error.message : String(error);
 	}
 
 	private async getAdapter(providerId: string): Promise<AgentSessionAdapter> {

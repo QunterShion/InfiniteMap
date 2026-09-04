@@ -216,7 +216,10 @@ define(function(require, exports, module) {
                 'selectall': '全选',
                 'topic': '分支主题',
                 'importnode': '导入节点',
-                'exportnode': '导出节点'
+                'exportnode': '导出节点',
+                'expandcollapse': '展开/收缩',
+                'expandall': '全部展开',
+                'collapseall': '全部收缩'
             },
             'nodeSplit': {
                 'label': '拆分节点',

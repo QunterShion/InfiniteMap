@@ -337,8 +337,14 @@ angular.module('kityminderEditor').factory('agentSessionService', [
 			getLiveSessionDetail: function(executionId) {
 				return copyLiveDetail(liveSessionDetails[executionId]);
 			},
-            openSession: function(nodeId, executionId, target) {
-				return request('openSession', { nodeId: nodeId, executionId: executionId, target: target });
+			openSession: function(nodeId, executionId, target, mode, fallbackPolicy) {
+				return request('openSession', {
+					nodeId: nodeId || undefined,
+					executionId: executionId,
+					target: target || 'provider-ide',
+					mode: mode || 'native',
+					fallbackPolicy: fallbackPolicy || 'provider-cli'
+				});
             }
         };
     }

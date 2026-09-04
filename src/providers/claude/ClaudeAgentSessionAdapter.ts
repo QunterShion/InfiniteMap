@@ -241,8 +241,11 @@ export class ClaudeAgentSessionAdapter implements AgentSessionAdapter {
 	}
 
 	public async open(input: OpenSessionInput): Promise<void> {
-		if (input.target !== 'provider-cli') {
-			return;
+		if (input.target !== 'provider-cli' && input.target !== 'provider-tui') {
+			throw this.withCode('NATIVE_OPEN_UNSUPPORTED', 'Claude IDE opening is handled by the guarded native resolver.');
+		}
+		if (!input.session.sessionId) {
+			throw this.withCode('SESSION_ID_MISSING', 'Claude session history is missing its session ID.');
 		}
 		const terminal = vscode.window.createTerminal({
 			name: 'InfiniteMap · Claude Agent',

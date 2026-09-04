@@ -14,6 +14,7 @@ angular.module('kityminderEditor').directive('agentActivityOverview', [
 				};
 				var refreshTimer = null;
 				var storedSessions = [];
+				var openStates = {};
 				scope.activity = { visible: false, loading: false, items: [], total: 0, error: null };
 
 				function apply() {
@@ -60,6 +61,7 @@ angular.module('kityminderEditor').directive('agentActivityOverview', [
 							updatedAt: session.updatedAt,
 							session: session
 						};
+						Object.assign(item, openStates[session.executionId] || {});
 						byExecution[session.executionId] = item;
 					});
 				scope.activity.items = Object.keys(byExecution).map(function(key) { return byExecution[key]; }).sort(function(left, right) {
@@ -133,10 +135,36 @@ angular.module('kityminderEditor').directive('agentActivityOverview', [
 				scope.closeAgentActivity = function() {
 					close({ detail: { restoreFocus: true } });
 				};
-				scope.openActivitySession = function(item) {
-					document.dispatchEvent(new CustomEvent('agent-session-detail-open', {
-						detail: { session: item.session, source: 'activity' }
-					}));
+				function openNative(item, target, mode, fallbackPolicy) {
+					if (!item || !item.executionId || item.opening || openStates[item.executionId] && openStates[item.executionId].opening) return;
+					openStates[item.executionId] = { opening: true, openError: null, openResult: null, openFallback: false };
+					merge(storedSessions);
+					apply();
+					agentSessionService.openSession(item.nodeId, item.executionId, target || 'provider-ide', mode || 'native', fallbackPolicy || 'provider-cli').then(function(result) {
+						openStates[item.executionId] = {
+							opening: false,
+							openResult: result,
+							openFallback: result && result.opened === false
+						};
+						merge(storedSessions);
+						apply();
+					}, function(error) {
+						openStates[item.executionId] = { opening: false, openError: error && error.message || String(error) };
+						merge(storedSessions);
+						apply();
+					});
+				}
+
+				scope.openActivitySession = function(item) { openNative(item); };
+				scope.retryActivitySessionOpen = function(item) { openNative(item); };
+				scope.openActivitySessionFallback = function(item, target) {
+					if (target === 'infinite-map') {
+						document.dispatchEvent(new CustomEvent('agent-session-detail-open', {
+							detail: { session: item.session, source: 'activity-fallback' }
+						}));
+						return;
+					}
+					openNative(item, target, 'fallback-only', 'provider-cli');
 				};
 				scope.$on('$destroy', function() {
 					if (refreshTimer) window.clearTimeout(refreshTimer);

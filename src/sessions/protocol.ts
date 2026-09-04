@@ -2,8 +2,11 @@ import {
 	AGENT_SESSION_PROTOCOL_VERSION,
 	AgentSessionErrorCode,
 	AgentSessionEventPayload,
+	OpenFallbackPolicy,
+	OpenTarget,
 	ProviderId,
 	ProviderInstallPhase,
+	SessionOpenMode,
 } from './types';
 
 export type AgentSessionOperation =
@@ -40,7 +43,9 @@ export interface AgentSessionRequest {
 	expectedTurnId?: string;
 	mutation?: 'rename' | 'setModel' | 'archive';
 	value?: string;
-	target?: 'infinite-map' | 'provider-cli' | 'provider-tui' | 'provider-ide';
+	target?: OpenTarget;
+	mode?: SessionOpenMode;
+	fallbackPolicy?: OpenFallbackPolicy;
 	cursor?: string;
 	limit?: number;
 	inputRequestId?: string;

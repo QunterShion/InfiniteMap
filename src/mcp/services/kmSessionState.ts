@@ -14,7 +14,8 @@ import {
 } from './kmFileReader';
 import { atomicWriteJsonFile, withKmFileLock } from './kmFileLock';
 
-export const SESSION_SCHEMA_VERSION = 1;
+export const LEGACY_SESSION_SCHEMA_VERSION = 1 as const;
+export const SESSION_SCHEMA_VERSION = 2 as const;
 export const DEFAULT_SESSION_PAGE_SIZE = 20;
 export const MAX_SESSION_PAGE_SIZE = 100;
 
@@ -27,6 +28,20 @@ export interface SessionReference {
   modelId?: string;
   effort?: string;
   openUri: string;
+  nativeOpen?: {
+    target: 'provider-ide' | 'provider-cli' | 'provider-tui';
+    contract:
+      | 'codex-vscode-private-uri-v1'
+      | 'claude-vscode-command-v1'
+      | 'claude-vscode-uri-v1'
+      | 'copilot-chat-sessions-proposed-v1';
+    uri?: string;
+    command?: string;
+    viewType?: string;
+    minExtensionVersion?: string;
+    detectedExtensionVersion?: string;
+    verifiedAt?: string;
+  };
 }
 
 export interface SessionError {
@@ -67,7 +82,7 @@ export interface NodeExecutionRecord {
 }
 
 export interface SessionState {
-  schemaVersion: 1;
+  schemaVersion: typeof SESSION_SCHEMA_VERSION;
   kmRevision: string;
   executions: Record<string, NodeExecutionRecord>;
   nodeIndex: Record<string, string[]>;
@@ -179,7 +194,7 @@ export async function readSessionState(kmPath: string): Promise<SessionState> {
   }
   try {
     const parsed = JSON.parse(raw) as SessionState;
-    if (!parsed || parsed.schemaVersion !== SESSION_SCHEMA_VERSION
+    if (!parsed || ![LEGACY_SESSION_SCHEMA_VERSION, SESSION_SCHEMA_VERSION].includes(parsed.schemaVersion)
       || typeof parsed.executions !== 'object' || typeof parsed.nodeIndex !== 'object') {
       throw new Error('invalid session sidecar schema');
     }
@@ -441,6 +456,7 @@ function validateRecordInput(input: RecordSessionInput): void {
   requiredText(input.session.provider, 'session.provider', 128);
   requiredText(input.session.sessionId, 'session.sessionId', 512);
 	validateOpenUri(input.session.openUri, input.executionId, input.nodeId);
+	validateNativeOpen(input.session.nativeOpen, input.session.provider, input.session.sessionId, input.session.threadId);
 	if (Boolean(input.nodeId) !== Boolean(input.taskKind)) {
 		throw new Error('nodeId 与 taskKind 必须同时提供或同时省略');
 	}
@@ -483,6 +499,55 @@ function validateOpenUri(openUri: string, executionId: string, nodeId?: string):
       throw new Error(`session.openUri 包含不允许的参数: ${key}`);
     }
   }
+}
+
+function validateNativeOpen(
+	nativeOpen: SessionReference['nativeOpen'],
+	provider: string,
+	sessionId: string,
+	threadId?: string
+): void {
+	if (!nativeOpen) return;
+	if (!['provider-ide', 'provider-cli', 'provider-tui'].includes(nativeOpen.target)) {
+		throw new Error('session.nativeOpen.target 不是允许的打开目标');
+	}
+	const expectedContract = provider === 'codex'
+		? 'codex-vscode-private-uri-v1'
+		: provider === 'claudecode'
+			? 'claude-vscode-command-v1'
+			: provider === 'copilot'
+				? 'copilot-chat-sessions-proposed-v1'
+				: undefined;
+	if (!expectedContract || nativeOpen.contract !== expectedContract) {
+		throw new Error('session.nativeOpen.contract 与 Provider 不匹配');
+	}
+	if (nativeOpen.uri) {
+		let uri: URL;
+		try {
+			uri = new URL(nativeOpen.uri);
+		} catch {
+			throw new Error('session.nativeOpen.uri 必须是有效 URI');
+		}
+		if (provider !== 'codex' || uri.protocol !== 'openai-codex:' || uri.hostname !== 'route'
+			|| !/^\/local\/[A-Za-z0-9._:%-]+$/.test(uri.pathname)) {
+			throw new Error('session.nativeOpen.uri 不是允许的 Codex URI');
+		}
+		const encodedId = encodeURIComponent(threadId || sessionId);
+		if (uri.pathname !== `/local/${encodedId}`) {
+			throw new Error('session.nativeOpen.uri 的会话 ID 与记录不匹配');
+		}
+	}
+	if (nativeOpen.command && nativeOpen.command !== 'claude-vscode.primaryEditor.open') {
+		throw new Error('session.nativeOpen.command 不是允许的 Provider 命令');
+	}
+	if (nativeOpen.viewType && nativeOpen.viewType !== 'chatgpt.conversationEditor') {
+		throw new Error('session.nativeOpen.viewType 不是允许的 custom editor');
+	}
+	for (const key of Object.keys(nativeOpen)) {
+		if (!['target', 'contract', 'uri', 'command', 'viewType', 'minExtensionVersion', 'detectedExtensionVersion', 'verifiedAt'].includes(key)) {
+			throw new Error(`session.nativeOpen 包含不允许的字段: ${key}`);
+		}
+	}
 }
 
 function assertTaskKind(node: KmNode, taskKind: KmTaskKind, status: NodeExecutionStatus): void {
@@ -565,7 +630,7 @@ async function rebuildSessionState(kmPath: string): Promise<SessionState> {
   return state;
 }
 
-function normalizeState(state: SessionState): SessionState {
+function normalizeState(state: SessionState | { schemaVersion: typeof LEGACY_SESSION_SCHEMA_VERSION; kmRevision?: string; executions: Record<string, NodeExecutionRecord>; nodeIndex: Record<string, string[]> }): SessionState {
   const executions = state.executions || {};
   const nodeIndex: Record<string, string[]> = {};
   for (const [nodeId, ids] of Object.entries(state.nodeIndex || {})) {

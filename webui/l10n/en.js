@@ -216,7 +216,10 @@ define(function(require, exports, module) {
                 'selectall': 'Select All',
                 'topic': 'Topic',
                 'importnode': 'Import Node',
-                'exportnode': 'Export Node'
+                'exportnode': 'Export Node',
+                'expandcollapse': 'Expand/Collapse',
+                'expandall': 'Expand All',
+                'collapseall': 'Collapse All'
             },
             'nodeSplit': {
                 'label': 'Split Node',

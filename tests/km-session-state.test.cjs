@@ -6,6 +6,8 @@ const test = require('node:test');
 
 const {
   getSessionStatePath,
+	readSessionState,
+	SESSION_SCHEMA_VERSION,
 	listFileSessions,
   listNodeSessions,
   recordSession,
@@ -139,6 +141,35 @@ test('session history is idempotent, paginated, recoverable, and marks orphan no
   doc.root.children = [];
   fs.writeFileSync(filePath, JSON.stringify(doc, null, 2));
   assert.equal((await listNodeSessions(filePath, 'task-1')).orphan, true);
+});
+
+test('normalizes v1 sidecars and persists nativeOpen additively as v2', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'infinite-map-session-v2-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const filePath = createMap(tempDir);
+  const input = sessionInput(filePath, {
+    session: {
+      ...sessionInput(filePath).session,
+      nativeOpen: {
+        target: 'provider-ide',
+        contract: 'codex-vscode-private-uri-v1',
+        uri: 'openai-codex://route/local/thread-1',
+        viewType: 'chatgpt.conversationEditor',
+        detectedExtensionVersion: '26.5825.51511',
+      },
+    },
+  });
+  await recordSession(input);
+  const sidecarPath = getSessionStatePath(filePath);
+  const persisted = JSON.parse(fs.readFileSync(sidecarPath, 'utf8'));
+  assert.equal(persisted.schemaVersion, SESSION_SCHEMA_VERSION);
+  assert.equal(persisted.executions['exec-1'].session.nativeOpen.contract, 'codex-vscode-private-uri-v1');
+
+  persisted.schemaVersion = 1;
+  fs.writeFileSync(sidecarPath, JSON.stringify(persisted));
+  const normalized = await readSessionState(filePath);
+  assert.equal(normalized.schemaVersion, 2);
+  assert.equal(normalized.executions['exec-1'].session.nativeOpen.uri, 'openai-codex://route/local/thread-1');
 });
 
 test('host can persist an unbound session before an agent claims a KM node', async (t) => {

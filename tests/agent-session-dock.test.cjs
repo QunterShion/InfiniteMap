@@ -107,6 +107,9 @@ test('session dock exposes activity and history as accessible right-edge tabs wi
 	}
 	assert.match(activityTemplate, /activity\.visible && !sessionDetail\.visible/);
 	assert.match(historyTemplate, /history\.visible && !sessionDetail\.visible/);
+	assert.match(activityTemplate, /ng-disabled="item\.opening"/);
+	assert.match(historyTemplate, /ng-disabled="session\.opening"/);
+	assert.match(historyTemplate, /openInInfiniteMap/);
 	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?width: ~"min\(108ch,/);
 	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?left:\s*50%/);
 	assert.match(sessionLess, /\[data-component="agent-session-detail"\][\s\S]*?color-scheme:\s*light/);
@@ -304,6 +307,46 @@ test('history tab queries real file-level session history when no node is suppli
   assert.equal(scope.history.sessions[0].nodeTitle, '真实节点');
   assert.ok(document.events.some((event) => event.type === 'agent-activity-close'));
   assert.ok(document.events.some((event) => event.type === 'agent-session-drawer-state' && event.detail.open));
+  scope.destroy();
+});
+
+test('history native opening is keyed by executionId, suppresses duplicate clicks, and exposes fallback actions', () => {
+  const document = createDocument();
+  let resolveOpen;
+  const calls = [];
+  const record = {
+    nodeId: 'node-1', executionId: 'execution-old', status: 'completed', updatedAt: '2026-09-03T10:00:00Z',
+    session: { provider: 'codex', sessionId: 'thread-old', modelId: 'gpt-5' },
+  };
+  const service = {
+    queryHistory() { return { then(resolve) { resolve({ sessions: [record], total: 1 }); } }; },
+    listLiveAgentSessions() { return []; },
+    openSession(...args) {
+      calls.push(args);
+      return { then(resolve) { resolveOpen = resolve; } };
+    },
+  };
+  const { factory } = loadDirective(
+    'webui/ui/directive/agentSessionHistory/agentSessionHistory.directive.js',
+    'agentSessionHistory',
+    { document, window: { setTimeout: (callback) => callback() } },
+  );
+  const scope = createScope();
+  factory(service).link(scope);
+  document.dispatchEvent(new FakeCustomEvent('agent-session-history-open', { detail: { nodeId: 'node-1' } }));
+
+  scope.openSession(scope.history.sessions[0]);
+  scope.openSession(scope.history.sessions[0]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ['node-1', 'execution-old', 'provider-ide', 'native', 'provider-cli']);
+  assert.equal(scope.history.sessions[0].opening, true);
+
+  resolveOpen({ opened: false, method: 'detail-fallback', warning: 'Native unavailable' });
+  assert.equal(scope.history.sessions[0].opening, false);
+  assert.equal(scope.history.sessions[0].openFallback, true);
+  scope.openSessionFallback(scope.history.sessions[0], 'infinite-map');
+  assert.equal(document.events.at(-1).type, 'agent-session-detail-open');
+  assert.equal(document.events.at(-1).detail.source, 'history-fallback');
   scope.destroy();
 });
 

@@ -117,13 +117,21 @@ angular.module('kityminderEditor')
 					return node && node.data && node.data.id;
 				}
 
+				// 截断文本，超过 maxLength 个字符时用 ... 替代
+				function truncateText(text, maxLength) {
+					if (!text || text.length <= maxLength) return text;
+					return text.substring(0, maxLength) + '...';
+				}
+
 				function getBreadcrumbs(node) {
 					var breadcrumbs = [];
 					var current = node;
 					while (current) {
+						var fullText = (current.data && current.data.text) || '—';
 						breadcrumbs.unshift({
 							nodeId: getNodeId(current) || '',
-							text: (current.data && current.data.text) || '—',
+							text: truncateText(fullText, 8),
+							fullText: fullText,  // 保留完整文本用于 tooltip
 							isCurrent: current === node
 						});
 						current = current.getParent ? current.getParent() : current.parent;
@@ -143,7 +151,16 @@ angular.module('kityminderEditor')
 
 				function isInFocusedTree(node) {
 					var focusedRoot = getFocusedRoot();
-					return !focusedRoot || focusedRoot === node || focusedRoot.isAncestorOf(node);
+					if (!focusedRoot || focusedRoot === node) return true;
+					if (!focusedRoot.isAncestorOf(node)) return false;
+
+					// 聚焦模式仍遵循子树的实际展开状态，收缩后隐藏全部后代。
+					var current = node;
+					while (current && current !== focusedRoot) {
+						if (current.parent && !current.parent.isExpanded()) return false;
+						current = current.parent;
+					}
+					return true;
 				}
 
 				function updateNodeVisibility(node) {
@@ -178,11 +195,9 @@ angular.module('kityminderEditor')
 
 				function shouldForceExpanded(node) {
 					var focusedRoot = getFocusedRoot();
-					return focusedRoot && (
-						node === focusedRoot ||
-						node.isAncestorOf(focusedRoot) ||
-						focusedRoot.isAncestorOf(node)
-					);
+					// 只强制展开从根到聚焦节点的路径，不强制展开聚焦节点的子孙节点
+					// 这样聚焦模式下仍可手动收缩/展开子节点
+					return focusedRoot && node.isAncestorOf(focusedRoot);
 				}
 
 				function overrideExpandedState(node) {
